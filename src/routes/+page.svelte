@@ -112,10 +112,10 @@
     // ============================================================================
 
     let showAdvancedSettings: boolean = false;
-    let activeTab: 'filters' | 'stats' | 'custom' | 'lookup' = 'filters';
+    let activeTab: 'filters' | 'history' | 'custom' | 'lookup' = 'filters';
 
     // ============================================================================
-    // STATE: SEARCH HISTORY (for Stats tab)
+    // STATE: SEARCH HISTORY (for Search History tab)
     // ============================================================================
 
     interface SearchHistoryEntry {
@@ -154,21 +154,11 @@
     }
 
     // ============================================================================
-    // FUNCTION: REFRESH SEARCH HISTORY
+    // FUNCTION: CLEAR SEARCH HISTORY
     // ============================================================================
-    function refreshSearchHistory() {
-        const stored = localStorage.getItem('searchHistory');
-        if (stored) {
-            try {
-                const parsed = JSON.parse(stored);
-                searchHistory = parsed.map((entry: any) => ({
-                    ...entry,
-                    timestamp: new Date(entry.timestamp)
-                }));
-            } catch (e) {
-                console.error('Failed to refresh search history:', e);
-            }
-        }
+    function clearSearchHistory() {
+        searchHistory = [];
+        localStorage.removeItem('searchHistory');
     }
 
     // ============================================================================
@@ -830,6 +820,9 @@
                 // Remove the term at the selected index
                 customTerms.splice(selectedTermIndex, 1);
                 localStorage.setItem('customSearchTerms', JSON.stringify(customTerms));
+
+                // Update reactive list
+                refreshSavedCustomTerms();
 
                 // Reload custom terms if enabled
                 if (enableUserTerms) {
@@ -2290,39 +2283,39 @@
         gap: 0.5rem;
     }
 
-    /* === STATS TAB - SEARCH HISTORY === */
-    .stats-section {
+    /* === SEARCH HISTORY TAB === */
+    .history-section {
         padding: 1rem;
     }
 
-    .stats-header {
+    .history-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
         margin-bottom: 0.5rem;
     }
 
-    .stats-section h3 {
+    .history-section h3 {
         font-size: 1.5rem;
         margin: 0;
     }
 
     .refresh-button {
         padding: 0.5rem 1rem;
-        background-color: var(--color-primary);
-        color: white;
-        border: none;
+        background-color: white;
+        color: black;
+        border: 2px solid black;
         border-radius: 4px;
         cursor: pointer;
         font-size: 0.9rem;
-        transition: background-color var(--transition-std);
+        transition: background-color 0.2s ease;
     }
 
     .refresh-button:hover {
-        background-color: var(--color-primary-dark);
+        background-color: var(--color-primary);
     }
 
-    .stats-description {
+    .history-description {
         font-size: 0.9rem;
         color: #666;
         margin: 0 0 1.5rem 0;
@@ -2457,10 +2450,10 @@
                 </button>
                 <button
                     class="advanced-tab"
-                    class:active={activeTab === 'stats'}
-                    on:click={() => activeTab = 'stats'}
+                    class:active={activeTab === 'history'}
+                    on:click={() => activeTab = 'history'}
                 >
-                    Stats
+                    Search History
                 </button>
                 <button
                     class="advanced-tab"
@@ -2617,17 +2610,17 @@
                 </div>
                 {/if}
 
-                <!-- STATS TAB -->
-                {#if activeTab === 'stats'}
+                <!-- SEARCH HISTORY TAB -->
+                {#if activeTab === 'history'}
                 <div class="tab-panel">
-                    <div class="stats-section">
-                        <div class="stats-header">
+                    <div class="history-section">
+                        <div class="history-header">
                             <h3>Search History</h3>
-                            <button class="refresh-button" on:click={refreshSearchHistory} title="Refresh search history from localStorage">
-                                ↻ Refresh
+                            <button class="refresh-button" on:click={clearSearchHistory} title="Clear search history">
+                                ↻ Clear History
                             </button>
                         </div>
-                        <p class="stats-description">Your search history for this session</p>
+                        <p class="history-description">Your search history for this session</p>
 
                         {#if searchHistory.length === 0}
                             <div class="empty-history">
