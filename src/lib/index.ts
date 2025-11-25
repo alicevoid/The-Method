@@ -21,7 +21,7 @@ export type { SearchPattern, Constraint } from './method-logic.js';
 // ============================================================================
 // URL FORMATTING (from search-settings.ts)
 // ============================================================================
-export { formatSearchTermToURL } from './search-settings.js';
+export { formatSearchTermToURL, fillSpecifierTemplate } from './search-settings.js';
 
 // ============================================================================
 // DEPRECATED (kept for backward compatibility - will be removed)

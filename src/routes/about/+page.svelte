@@ -200,7 +200,7 @@
             Developed & Maintained by <strong>alicevoid</strong>. Make sure to be Nice to Yourself &lt;3
         </p>
         <p style="margin-top: 1.5rem; color: #666;">
-            Last Updated: November 10, 2025
+            Last Updated: November 24, 2025
         </p>
     </div>
 </main>

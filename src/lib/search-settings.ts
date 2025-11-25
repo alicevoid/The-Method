@@ -109,7 +109,7 @@ function generateSearchTerm(
  * - XXXX -> 1234
  * - HHMMSS -> 143059
  */
-function fillSpecifierTemplate(
+export function fillSpecifierTemplate(
   specifier: string,
   pattern: SearchPattern,
   formattedDate: Date

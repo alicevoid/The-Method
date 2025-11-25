@@ -21,7 +21,8 @@
     // IMPORTS
     // ============================================================================
     import { base } from '$app/paths';
-    import { loadAllSearchTerms, formatSearchTermToURL, type SearchPattern } from '$lib';
+    import { onMount } from 'svelte';
+    import { loadAllSearchTerms, formatSearchTermToURL, fillSpecifierTemplate, type SearchPattern } from '$lib';
 
     // ============================================================================
     // DATA STRUCTURE: FULL LIST OF SEARCH TERM OBJECTS
@@ -61,10 +62,12 @@
     }
 
     // Collision Handling for Overlapping Names with Different Specifiers
+    // availableNames represents terms that are "pre-approved for random selection"
+    // It is controlled by selectedGenres - only terms from selected genres appear here
     let availableNames: NameSpecifierItem[] = [];
     $: {
-        const filtered = allSearchTerms
-            .filter(term => selectedGenres.size === 0 || selectedGenres.has(term.genre));
+        // Filter by selected genres - this controls what appears in the search terms list
+        const filtered = allSearchTerms.filter(term => selectedGenres.has(term.genre));
 
         // Expand patterns with multiple specifiers into separate items
         const uniqueCombos = new Map<string, NameSpecifierItem>();
@@ -109,7 +112,153 @@
     // ============================================================================
 
     let showAdvancedSettings: boolean = false;
-    let activeTab: 'filters' | 'stats' | 'custom' = 'filters';
+    let activeTab: 'filters' | 'stats' | 'custom' | 'lookup' = 'filters';
+
+    // ============================================================================
+    // STATE: SEARCH HISTORY (for Stats tab)
+    // ============================================================================
+
+    interface SearchHistoryEntry {
+        name: string;
+        specifier: string;
+        url: string;
+        timestamp: Date;
+    }
+
+    let searchHistory: SearchHistoryEntry[] = [];
+
+    // ============================================================================
+    // LIFECYCLE: LOAD SEARCH HISTORY FROM LOCALSTORAGE
+    // ============================================================================
+    onMount(() => {
+        const stored = localStorage.getItem('searchHistory');
+        if (stored) {
+            try {
+                const parsed = JSON.parse(stored);
+                // Convert timestamp strings back to Date objects
+                searchHistory = parsed.map((entry: any) => ({
+                    ...entry,
+                    timestamp: new Date(entry.timestamp)
+                }));
+            } catch (e) {
+                console.error('Failed to load search history from localStorage:', e);
+            }
+        }
+    });
+
+    // ============================================================================
+    // REACTIVE: SAVE SEARCH HISTORY TO LOCALSTORAGE
+    // ============================================================================
+    $: if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('searchHistory', JSON.stringify(searchHistory));
+    }
+
+    // ============================================================================
+    // FUNCTION: REFRESH SEARCH HISTORY
+    // ============================================================================
+    function refreshSearchHistory() {
+        const stored = localStorage.getItem('searchHistory');
+        if (stored) {
+            try {
+                const parsed = JSON.parse(stored);
+                searchHistory = parsed.map((entry: any) => ({
+                    ...entry,
+                    timestamp: new Date(entry.timestamp)
+                }));
+            } catch (e) {
+                console.error('Failed to refresh search history:', e);
+            }
+        }
+    }
+
+    // ============================================================================
+    // STATE: TERM LOOKUP TAB
+    // ============================================================================
+
+    let termLookupSearchQuery: string = '';
+    let termLookupGenreFilter: string = 'all';
+    let termLookupAgeFilter: 'any' | 'new' | 'old' = 'any';
+    let termLookupSortOrder: 'asc' | 'desc' = 'asc';
+    let selectedLookupTerm: string | null = null; // Track which term detail is expanded (displayKey)
+
+    // ============================================================================
+    // REACTIVE: TERM LOOKUP FILTERED LIST
+    // ============================================================================
+    // Create expanded list of all name+specifier combinations for lookup
+    // This shows all terms (not filtered by selected genres like availableNames)
+
+    let lookupTermsList: NameSpecifierItem[] = [];
+    $: {
+        // Start with all search terms
+        const allTerms = allSearchTerms;
+
+        // Expand patterns with multiple specifiers into separate items
+        const uniqueCombos = new Map<string, NameSpecifierItem & { genre: string, age: string }>();
+
+        for (const term of allTerms) {
+            for (const specifier of term.specifiers) {
+                const key = `${term.name}|||${specifier}`;
+                if (!uniqueCombos.has(key)) {
+                    uniqueCombos.set(key, {
+                        name: term.name,
+                        specifier: specifier,
+                        displayKey: key,
+                        showSpecifier: false,
+                        genre: term.genre,
+                        age: term.age
+                    });
+                }
+            }
+        }
+
+        let items = Array.from(uniqueCombos.values());
+
+        // Apply filters
+        items = items.filter(item => {
+            // Search query filter
+            if (termLookupSearchQuery) {
+                const query = termLookupSearchQuery.toLowerCase();
+                const matchesName = item.name.toLowerCase().includes(query);
+                const matchesSpecifier = item.specifier.toLowerCase().includes(query);
+                if (!matchesName && !matchesSpecifier) {
+                    return false;
+                }
+            }
+
+            // Genre filter
+            if (termLookupGenreFilter !== 'all' && item.genre !== termLookupGenreFilter) {
+                return false;
+            }
+
+            // Age filter
+            if (termLookupAgeFilter !== 'any') {
+                if (item.age !== '' && item.age !== termLookupAgeFilter) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        // Count how many items have each name for showSpecifier logic
+        const nameCounts = new Map<string, number>();
+        for (const item of items) {
+            nameCounts.set(item.name, (nameCounts.get(item.name) || 0) + 1);
+        }
+
+        // Mark items that need to show specifiers
+        for (const item of items) {
+            item.showSpecifier = (nameCounts.get(item.name) || 0) > 1;
+        }
+
+        // Sort
+        items.sort((a, b) => {
+            const comparison = a.name.localeCompare(b.name);
+            return termLookupSortOrder === 'asc' ? comparison : -comparison;
+        });
+
+        lookupTermsList = items;
+    }
 
     // ============================================================================
     // STATE: DATE FILTER
@@ -152,6 +301,7 @@
     let customConstraintDate: string = '';
     let showMoreInfo: boolean = false; // Toggle for optional fields
     let selectedTermIndex: number | null = null; // Track which term is loaded for editing
+    let savedCustomTerms: SearchPattern[] = []; // Reactive list of saved custom terms
 
     // ============================================================================
     // STATE: IMPORT/EXPORT MANAGER
@@ -196,10 +346,11 @@
     // ============================================================================
     // STATE: NAME/SEARCH TERM SELECTION
     // ============================================================================
-    // Stores the displayKey (name|||specifier) for each selected name+specifier combination
-    // This will update the active flags for filtering the search term list
+    // selectedNames contains the displayKeys that are actually enabled for random selection
+    // When a genre is selected, all its terms are added to selectedNames
+    // When a genre is deselected, all its terms are removed from selectedNames
+    // Users can individually toggle terms on/off within the available list
 
-    // Variables to hold selected names
     let selectedNames: Set<string> = new Set();
     let selectAllNames: boolean = true;
     let nameDropdownOpen: boolean = false;
@@ -208,10 +359,43 @@
     let nameSearchTimeout: number | null = null;
     let nameDropdownElement: HTMLDivElement;
 
-    // Initialize selectedNames to all available names after they're computed (only once)
-    $: if (availableNames.length > 0 && !namesInitialized) {
-        selectedNames = new Set(availableNames.map(item => item.displayKey));
-        namesInitialized = true;
+    // Track the previous set of available names to detect what changed
+    let previousAvailable: Set<string> = new Set();
+
+    // When availableNames changes (due to genre selection), update selectedNames
+    // New terms from newly selected genres should be added to selectedNames
+    // Terms from deselected genres should be removed from selectedNames
+    $: {
+        // Get the set of currently available displayKeys
+        const currentAvailable = new Set(availableNames.map(item => item.displayKey));
+
+        // If this is the first initialization, select all available terms
+        if (!namesInitialized && availableNames.length > 0) {
+            selectedNames = new Set(currentAvailable);
+            namesInitialized = true;
+            previousAvailable = currentAvailable;
+        } else if (namesInitialized) {
+            // For subsequent updates:
+            // 1. Remove terms that are no longer available (genre was deselected)
+            const newSelected = new Set<string>();
+            for (const key of selectedNames) {
+                if (currentAvailable.has(key)) {
+                    newSelected.add(key);
+                }
+            }
+
+            // 2. Add newly available terms (genre was selected)
+            // Only add terms that are new (weren't in previousAvailable)
+            for (const key of currentAvailable) {
+                if (!previousAvailable.has(key)) {
+                    // This is a newly added term from a newly selected genre
+                    newSelected.add(key);
+                }
+            }
+
+            selectedNames = newSelected;
+            previousAvailable = currentAvailable;
+        }
     }
 
     // Sync selectAllNames checkbox with actual selection state
@@ -227,15 +411,11 @@
     // ============================================================================
     // Create a filtered list of search terms based on all active filters
     // This will be used for random selection when "Find Videos" is clicked
+    // Note: We only filter by selectedNames and age now - genres control what's in selectedNames
 
     let activeSearchTerms: SearchPattern[] = [];
     $: {
         activeSearchTerms = allSearchTerms.filter(pattern => {
-            // Filter by genre - if no genres selected, show none
-            if (selectedGenres.size > 0 && !selectedGenres.has(pattern.genre)) {
-                return false;
-            }
-
             // Filter by age (new/old/any)
             if (selectedAge !== 'any') {
                 // If pattern has a specific age, it must match the selected age
@@ -248,7 +428,7 @@
                 }
             }
 
-            // Filter by name+specifier combination
+            // Filter by name+specifier combination (selectedNames is the only source of truth)
             // Check if any of the pattern's specifiers match a selected name
             if (selectedNames.size > 0) {
                 const hasMatchingSpecifier = pattern.specifiers.some((specifier: string) => {
@@ -362,10 +542,13 @@
     }
 
     // Toggle individual name+specifier selection
+    // This directly adds/removes terms from the selectedNames set
     function toggleName(displayKey: string) {
         if (selectedNames.has(displayKey)) {
+            // User is deselecting - remove from selected
             selectedNames.delete(displayKey);
         } else {
+            // User is selecting - add to selected
             selectedNames.add(displayKey);
         }
         selectedNames = selectedNames; // Trigger reactivity
@@ -517,6 +700,17 @@
 
         console.log('Opening YouTube search:', formattedURL);
 
+        // Generate the filled specifier value (e.g., "XXXX" -> "1234")
+        const filledSpecifier = fillSpecifierTemplate(result.specifier, result.pattern, formattedDate);
+
+        // Add to search history
+        searchHistory = [{
+            name: result.pattern.name,
+            specifier: filledSpecifier,
+            url: formattedURL,
+            timestamp: new Date()
+        }, ...searchHistory]; // Newest first
+
         // Open the search in a new tab
         window.open(formattedURL, '_blank');
     }
@@ -561,18 +755,14 @@
 
     // Save a custom search term to LocalStorage
     function saveSearchTerm() {
-        if (!customName.trim()) {
-            alert('Please enter a name for your search term');
-            return;
-        }
-
         // Filter out empty specifiers
         const specifiersArray = customSpecifiersList
             .map((s: string) => s.trim())
             .filter((s: string) => s.length > 0);
 
-        if (specifiersArray.length === 0) {
-            alert('Please enter at least one specifier');
+        // Require at least one of: name OR specifier
+        if (!customName.trim() && specifiersArray.length === 0) {
+            alert('Please enter at least a name OR a specifier');
             return;
         }
 
@@ -583,8 +773,8 @@
         }
 
         const searchTerm = developSearchTerm(
-            customName,
-            specifiersArray,
+            customName.trim() || '', // Allow empty name
+            specifiersArray.length > 0 ? specifiersArray : [''], // Ensure at least empty string
             customGenre || 'Custom', // Ensure genre defaults to "Custom"
             customAge,
             constraint
@@ -626,6 +816,34 @@
         }
     }
 
+    // Delete the currently selected custom term
+    function deleteCurrentTerm() {
+        if (selectedTermIndex === null) {
+            alert('No term selected to delete. Please select a term from the dropdown first.');
+            return;
+        }
+
+        const customTerms = JSON.parse(localStorage.getItem('customSearchTerms') || '[]');
+        if (selectedTermIndex >= 0 && selectedTermIndex < customTerms.length) {
+            const termName = customTerms[selectedTermIndex].name || 'this term';
+            if (confirm(`Are you sure you want to delete "${termName}"?`)) {
+                // Remove the term at the selected index
+                customTerms.splice(selectedTermIndex, 1);
+                localStorage.setItem('customSearchTerms', JSON.stringify(customTerms));
+
+                // Reload custom terms if enabled
+                if (enableUserTerms) {
+                    loadCustomTermsIntoPool();
+                }
+
+                // Clear the form
+                clearForm();
+
+                alert('Term deleted successfully!');
+            }
+        }
+    }
+
     // Load a custom term from localStorage into the form
     function loadTermIntoForm(index: number) {
         const customTerms = JSON.parse(localStorage.getItem('customSearchTerms') || '[]');
@@ -649,10 +867,16 @@
         }
     }
 
+    // Refresh the saved custom terms list from localStorage
+    function refreshSavedCustomTerms() {
+        savedCustomTerms = JSON.parse(localStorage.getItem('customSearchTerms') || '[]');
+    }
+
     function saveSearchTermToStorage(searchTerm: SearchPattern) {
         const existing = JSON.parse(localStorage.getItem('customSearchTerms') || '[]');
         existing.push(searchTerm);
         localStorage.setItem('customSearchTerms', JSON.stringify(existing));
+        refreshSavedCustomTerms(); // Update reactive list
     }
 
     // Reload custom terms from localStorage (manual refresh)
@@ -1281,6 +1505,25 @@
         font-size: 1rem;
     }
 
+    .button-group {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .delete-button {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .delete-button:hover {
+        background-color: #c82333;
+    }
+
+    .save-button {
+        background-color: var(--color-primary);
+        color: black;
+    }
+
     .form-top-row {
         display: flex;
         gap: 1rem;
@@ -1779,6 +2022,377 @@
             font-size: 0.65rem;
         }
     }
+
+    /* === TERM LOOKUP TAB STYLES === */
+    .term-lookup-section {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+    }
+
+    .term-lookup-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .lookup-search-input {
+        padding: 0.75rem 1rem;
+        font-size: 1rem;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        background-color: var(--color-bg);
+        transition: border-color var(--transition-std);
+        box-sizing: border-box;
+    }
+
+    .lookup-search-input:focus {
+        outline: none;
+        border-color: var(--color-primary);
+    }
+
+    .lookup-filters-row {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .lookup-filter {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .lookup-filter label {
+        font-size: 0.9rem;
+        font-weight: 600;
+    }
+
+    .lookup-filter select {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.9rem;
+        border: 2px solid #ddd;
+        border-radius: 6px;
+        background-color: var(--color-bg);
+        cursor: pointer;
+        transition: border-color var(--transition-std);
+    }
+
+    .lookup-filter select:focus {
+        outline: none;
+        border-color: var(--color-primary);
+    }
+
+    .lookup-sort {
+        margin-left: auto;
+    }
+
+    .lookup-sort-button {
+        padding: 0.5rem 1rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+        background-color: var(--color-bg);
+        border: 2px solid #ddd;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all var(--transition-std);
+    }
+
+    .lookup-sort-button:hover {
+        background-color: var(--color-primary);
+        border-color: var(--color-primary);
+    }
+
+    .lookup-results-count {
+        font-size: 0.9rem;
+        color: #666;
+        font-weight: 600;
+    }
+
+    .term-lookup-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        max-height: 500px;
+        overflow-y: auto;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        background-color: var(--color-bg);
+        padding: 0.5rem;
+        box-sizing: border-box;
+    }
+
+    .term-lookup-item-wrapper {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .term-lookup-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1rem;
+        background: none;
+        border: none;
+        cursor: pointer;
+        text-align: left;
+        transition: background-color var(--transition-std);
+        border-radius: 4px;
+        width: 100%;
+    }
+
+    .term-lookup-item:hover {
+        background-color: var(--color-primary);
+    }
+
+    .term-lookup-item.expanded {
+        background-color: var(--color-primary);
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+    }
+
+    .term-lookup-name {
+        font-size: 1rem;
+        font-weight: 500;
+        color: #000;
+    }
+
+    .term-lookup-specifier {
+        font-size: 0.9rem;
+        color: #aaa;
+        margin-left: 4px;
+    }
+
+    .term-lookup-empty {
+        padding: 2rem;
+        text-align: center;
+        color: #999;
+    }
+
+    .term-lookup-empty p {
+        font-size: 1rem;
+    }
+
+    /* === TERM DETAIL BOX === */
+    .term-detail-box {
+        background-color: #fff;
+        color: #000;
+        border: 2px solid #ddd;
+        border-top: none;
+        border-radius: 0 0 4px 4px;
+        padding: 1rem;
+        margin-top: -4px;
+    }
+
+    .term-detail-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .term-detail-section.previous-searches {
+        margin-top: 0.5rem;
+    }
+
+    .term-detail-row {
+        display: flex;
+        gap: 0.75rem;
+        align-items: baseline;
+    }
+
+    .term-detail-label {
+        font-weight: 700;
+        font-size: 0.95rem;
+        /* color: #fff; */
+        min-width: 120px;
+    }
+
+    .term-detail-value {
+        font-size: 0.95rem;
+        /* color: #fff; */
+        flex: 1;
+    }
+
+    .term-detail-divider {
+        height: 2px;
+        /* background-color: #fff; */
+        margin: 0.5rem 0 1rem 0;
+    }
+
+    .term-detail-section h4 {
+        font-size: 1rem;
+        font-weight: 700;
+        /* color: #fff; */
+        margin: 0 0 0.5rem 0;
+    }
+
+    .coming-soon-text {
+        font-size: 0.9rem;
+        color: #aaa;
+        font-style: italic;
+    }
+
+    .no-history-text {
+        font-size: 0.9rem;
+        color: #aaa;
+        font-style: italic;
+    }
+
+    .term-history-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .term-history-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        background-color: #f5f5f5;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        cursor: pointer;
+        text-align: left;
+        transition: background-color var(--transition-std);
+    }
+
+    .term-history-item:hover {
+        background-color: lightcyan;
+    }
+
+    .term-history-specifier {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #333;
+    }
+
+    .term-history-timestamp {
+        font-size: 0.8rem;
+        color: #666;
+    }
+
+    .specifier-example {
+        color: #aaa;
+        font-size: 0.85rem;
+    }
+
+    .specifier-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .specifier-item {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    /* === STATS TAB - SEARCH HISTORY === */
+    .stats-section {
+        padding: 1rem;
+    }
+
+    .stats-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+
+    .stats-section h3 {
+        font-size: 1.5rem;
+        margin: 0;
+    }
+
+    .refresh-button {
+        padding: 0.5rem 1rem;
+        background-color: var(--color-primary);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: background-color var(--transition-std);
+    }
+
+    .refresh-button:hover {
+        background-color: var(--color-primary-dark);
+    }
+
+    .stats-description {
+        font-size: 0.9rem;
+        color: #666;
+        margin: 0 0 1.5rem 0;
+    }
+
+    .empty-history {
+        text-align: center;
+        padding: 3rem;
+        color: #999;
+    }
+
+    .empty-history p {
+        font-size: 1rem;
+    }
+
+    .search-history-list {
+        display: flex;
+        flex-direction: column;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .history-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 1.5rem;
+        background-color: #f5f5f5;
+        border: none;
+        border-bottom: 1px solid #ddd;
+        cursor: pointer;
+        text-align: left;
+        transition: background-color var(--transition-std);
+    }
+
+    .history-item:last-child {
+        border-bottom: none;
+    }
+
+    .history-item.even {
+        background-color: #e8e8e8;
+    }
+
+    .history-item:hover {
+        background-color: var(--color-primary);
+    }
+
+    .history-term {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .history-name {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #000;
+    }
+
+    .history-specifier {
+        font-size: 0.9rem;
+        color: #666;
+    }
+
+    .history-timestamp {
+        font-size: 0.85rem;
+        color: #888;
+        white-space: nowrap;
+    }
 </style>
 
 <!-- Main Content -->
@@ -1847,6 +2461,13 @@
                     on:click={() => activeTab = 'stats'}
                 >
                     Stats
+                </button>
+                <button
+                    class="advanced-tab"
+                    class:active={activeTab === 'lookup'}
+                    on:click={() => activeTab = 'lookup'}
+                >
+                    Term Lookup
                 </button>
                 <button
                     class="advanced-tab"
@@ -1999,9 +2620,45 @@
                 <!-- STATS TAB -->
                 {#if activeTab === 'stats'}
                 <div class="tab-panel">
-                    <div class="coming-soon">
-                        <h3>Coming Soon</h3>
-                        <p>Video discovery statistics and analytics will be available here in a future update.</p>
+                    <div class="stats-section">
+                        <div class="stats-header">
+                            <h3>Search History</h3>
+                            <button class="refresh-button" on:click={refreshSearchHistory} title="Refresh search history from localStorage">
+                                ↻ Refresh
+                            </button>
+                        </div>
+                        <p class="stats-description">Your search history for this session</p>
+
+                        {#if searchHistory.length === 0}
+                            <div class="empty-history">
+                                <p>No searches yet. Click "Find Videos" to start!</p>
+                            </div>
+                        {:else}
+                            <div class="search-history-list">
+                                {#each searchHistory as entry, index}
+                                    {@const formattedTime = entry.timestamp.toLocaleString('en-US', {
+                                        year: 'numeric',
+                                        month: 'short',
+                                        day: 'numeric',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        second: '2-digit',
+                                        hour12: false
+                                    })}
+                                    <button
+                                        class="history-item"
+                                        class:even={index % 2 === 0}
+                                        on:click={() => window.open(entry.url, '_blank')}
+                                    >
+                                        <div class="history-term">
+                                            <span class="history-name">{entry.name}</span>
+                                            <span class="history-specifier">{entry.specifier}</span>
+                                        </div>
+                                        <div class="history-timestamp">{formattedTime}</div>
+                                    </button>
+                                {/each}
+                            </div>
+                        {/if}
                     </div>
                 </div>
                 {/if}
@@ -2027,18 +2684,25 @@
         <div class="custom-terms-creator">
             <h3>Create/Edit Search Terms</h3>
 
-            <!-- Top Row: Save Button + Term Selector -->
+            <!-- Top Row: Save/Delete Buttons + Term Selector -->
             <div class="form-top-row">
-                <button class="custom-term-button" on:click={saveSearchTerm}>
-                    <h2>Save Custom Term</h2>
-                </button>
+                <div class="button-group">
+                    <button class="custom-term-button save-button" on:click={saveSearchTerm}>
+                        <h2>Save</h2>
+                    </button>
+                    <button class="custom-term-button delete-button" on:click={deleteCurrentTerm}>
+                        <h2>Delete</h2>
+                    </button>
+                </div>
 
                 <!-- Form Dropdown Menu -->
                 <div class="term-selector">
-                    <select on:change={(e) => {
+                    <select bind:value={selectedTermIndex} on:change={(e) => {
                         const index = parseInt(e.currentTarget.value);
                         if (!isNaN(index) && index >= 0) {
                             loadTermIntoForm(index);
+                        } else {
+                            clearForm();
                         }
                     }}>
                         <option value="-1">
@@ -2245,6 +2909,186 @@
 
         </div>
         {/if}
+
+                    </div>
+                </div>
+                {/if}
+
+                <!-- TERM LOOKUP TAB -->
+                {#if activeTab === 'lookup'}
+                <div class="tab-panel">
+                    <div class="term-lookup-section">
+
+                        <!-- Search and Filter Controls -->
+                        <div class="term-lookup-controls">
+
+                            <!-- Search Bar -->
+                            <input
+                                type="text"
+                                placeholder="Search terms..."
+                                bind:value={termLookupSearchQuery}
+                                class="lookup-search-input"
+                            />
+
+                            <!-- Filters Row -->
+                            <div class="lookup-filters-row">
+
+                                <!-- Genre Filter -->
+                                <div class="lookup-filter">
+                                    <label for="lookup-genre-filter">Genre:</label>
+                                    <select id="lookup-genre-filter" bind:value={termLookupGenreFilter}>
+                                        <option value="all">All Genres</option>
+                                        {#each allGenres as genre}
+                                            <option value={genre}>{genre}</option>
+                                        {/each}
+                                    </select>
+                                </div>
+
+                                <!-- Age Filter -->
+                                <div class="lookup-filter">
+                                    <label for="lookup-age-filter">Age:</label>
+                                    <select id="lookup-age-filter" bind:value={termLookupAgeFilter}>
+                                        <option value="any">Any</option>
+                                        <option value="new">New</option>
+                                        <option value="old">Old</option>
+                                    </select>
+                                </div>
+
+                                <!-- Sort Button -->
+                                <div class="lookup-sort">
+                                    <button
+                                        class="lookup-sort-button"
+                                        on:click={() => termLookupSortOrder = termLookupSortOrder === 'asc' ? 'desc' : 'asc'}
+                                        title={termLookupSortOrder === 'asc' ? 'Sort Z-A' : 'Sort A-Z'}
+                                    >
+                                        Sort: {termLookupSortOrder === 'asc' ? 'A-Z' : 'Z-A'}
+                                    </button>
+                                </div>
+
+                            </div>
+
+                            <!-- Results Count -->
+                            <div class="lookup-results-count">
+                                Showing {lookupTermsList.length} terms
+                            </div>
+
+                        </div>
+
+                        <!-- Terms List -->
+                        <div class="term-lookup-list">
+                            {#each lookupTermsList as item}
+                                <div class="term-lookup-item-wrapper">
+                                    <button
+                                        class="term-lookup-item"
+                                        class:expanded={selectedLookupTerm === item.displayKey}
+                                        on:click={() => selectedLookupTerm = selectedLookupTerm === item.displayKey ? null : item.displayKey}
+                                    >
+                                        <span class="term-lookup-name">{item.name}</span>
+                                        {#if item.showSpecifier}
+                                            <span class="term-lookup-specifier">{item.specifier}</span>
+                                        {/if}
+                                    </button>
+
+                                    {#if selectedLookupTerm === item.displayKey}
+                                        {@const pattern = allSearchTerms.find(term =>
+                                            term.name === item.name && term.specifiers.includes(item.specifier)
+                                        )}
+                                        {#if pattern}
+                                            <div class="term-detail-box">
+                                                <!-- Term Details -->
+                                                <div class="term-detail-section">
+                                                    <div class="term-detail-row">
+                                                        <span class="term-detail-label">Name:</span>
+                                                        <span class="term-detail-value">{pattern.name}</span>
+                                                    </div>
+                                                    <div class="term-detail-row">
+                                                        <span class="term-detail-label">Specifier(s):</span>
+                                                        <span class="term-detail-value">
+                                                            {#if pattern.specifiers.length === 0 || (pattern.specifiers.length === 1 && pattern.specifiers[0] === '')}
+                                                                None
+                                                            {:else}
+                                                                <div class="specifier-list">
+                                                                    {#each pattern.specifiers as spec}
+                                                                        {@const example = fillSpecifierTemplate(spec, pattern, new Date())}
+                                                                        <div class="specifier-item">
+                                                                            <span>{spec}</span>
+                                                                            {#if example && example !== ''}
+                                                                                <span class="specifier-example">(i.e: {example})</span>
+                                                                            {/if}
+                                                                        </div>
+                                                                    {/each}
+                                                                </div>
+                                                            {/if}
+                                                        </span>
+                                                    </div>
+                                                    <div class="term-detail-row">
+                                                        <span class="term-detail-label">Genre:</span>
+                                                        <span class="term-detail-value">{pattern.genre}</span>
+                                                    </div>
+                                                    <div class="term-detail-row">
+                                                        <span class="term-detail-label">Age:</span>
+                                                        <span class="term-detail-value">{pattern.age || 'Any'}</span>
+                                                    </div>
+                                                    {#if pattern.constraints && pattern.constraints.length > 0}
+                                                        <div class="term-detail-row">
+                                                            <span class="term-detail-label">Constraints:</span>
+                                                            <span class="term-detail-value">
+                                                                {#each pattern.constraints as constraint, i}
+                                                                    {constraint.type}: {constraint.date}{i < pattern.constraints.length - 1 ? ', ' : ''}
+                                                                {/each}
+                                                            </span>
+                                                        </div>
+                                                    {:else}
+                                                        <div class="term-detail-row">
+                                                            <span class="term-detail-label">Constraints:</span>
+                                                            <span class="term-detail-value">None</span>
+                                                        </div>
+                                                    {/if}
+                                                </div>
+
+                                                <!-- Previous Searches -->
+                                                <div class="term-detail-section previous-searches">
+                                                    <div class="term-detail-divider"></div>
+                                                    <h4>Previous searches with this term:</h4>
+                                                    {#if searchHistory.filter(entry => entry.name === pattern.name).length === 0}
+                                                        <p class="no-history-text">No searches yet with this term.</p>
+                                                    {:else}
+                                                        {@const filteredHistory = searchHistory.filter(entry => entry.name === pattern.name)}
+                                                        <div class="term-history-list">
+                                                            {#each filteredHistory as entry}
+                                                                {@const formattedTime = entry.timestamp.toLocaleString('en-US', {
+                                                                    year: 'numeric',
+                                                                    month: 'short',
+                                                                    day: 'numeric',
+                                                                    hour: '2-digit',
+                                                                    minute: '2-digit',
+                                                                    second: '2-digit',
+                                                                    hour12: false
+                                                                })}
+                                                                <button
+                                                                    class="term-history-item"
+                                                                    on:click={() => window.open(entry.url, '_blank')}
+                                                                    title="Click to open this search in YouTube"
+                                                                >
+                                                                    <div class="term-history-specifier">{entry.specifier}</div>
+                                                                    <div class="term-history-timestamp">{formattedTime}</div>
+                                                                </button>
+                                                            {/each}
+                                                        </div>
+                                                    {/if}
+                                                </div>
+                                            </div>
+                                        {/if}
+                                    {/if}
+                                </div>
+                            {/each}
+
+                            {#if lookupTermsList.length === 0}
+                                <div class="term-lookup-empty">
+                                    <p>No terms found matching your filters.</p>
+                                </div>
+                            {/if}
+                        </div>
 
                     </div>
                 </div>
