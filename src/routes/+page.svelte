@@ -112,7 +112,7 @@
     // ============================================================================
 
     let showAdvancedSettings: boolean = false;
-    let activeTab: 'filters' | 'history' | 'custom' | 'lookup' = 'filters';
+    let activeTab: 'filters' | 'rng' | 'history' | 'custom' | 'lookup' = 'filters';
 
     // ============================================================================
     // STATE: SEARCH HISTORY (for Search History tab)
@@ -123,34 +123,71 @@
         specifier: string;
         url: string;
         timestamp: Date;
+        dateModifier?: string; // e.g., "before:20241125" or "after:20050423"
     }
 
     let searchHistory: SearchHistoryEntry[] = [];
+    let enablePersistentHistory: boolean = false;
+    let showDisableWarning: boolean = false; // For custom modal
+    let pendingCheckboxElement: HTMLInputElement | null = null; // Store checkbox reference for revert
 
     // ============================================================================
-    // LIFECYCLE: LOAD SEARCH HISTORY FROM LOCALSTORAGE
+    // COOKIE HELPER FUNCTIONS
+    // ============================================================================
+    function setCookie(name: string, value: string, days: number = 365) {
+        const date = new Date();
+        date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+        const expires = `expires=${date.toUTCString()}`;
+        document.cookie = `${name}=${value};${expires};path=/`;
+    }
+
+    function getCookie(name: string): string | null {
+        const nameEQ = `${name}=`;
+        const ca = document.cookie.split(';');
+        for (let i = 0; i < ca.length; i++) {
+            let c = ca[i];
+            while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+            if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+        }
+        return null;
+    }
+
+    function deleteCookie(name: string) {
+        document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;`;
+    }
+
+    // ============================================================================
+    // LIFECYCLE: LOAD SEARCH HISTORY AND COOKIE PREFERENCE
     // ============================================================================
     onMount(() => {
-        const stored = localStorage.getItem('searchHistory');
-        if (stored) {
-            try {
-                const parsed = JSON.parse(stored);
-                // Convert timestamp strings back to Date objects
-                searchHistory = parsed.map((entry: any) => ({
-                    ...entry,
-                    timestamp: new Date(entry.timestamp)
-                }));
-            } catch (e) {
-                console.error('Failed to load search history from localStorage:', e);
+        // Check if user previously enabled persistent history
+        const persistentPref = getCookie('enablePersistentHistory');
+        if (persistentPref === 'true') {
+            enablePersistentHistory = true;
+            // Load history from cookie
+            const storedHistory = getCookie('searchHistory');
+            if (storedHistory) {
+                try {
+                    const parsed = JSON.parse(decodeURIComponent(storedHistory));
+                    searchHistory = parsed.map((entry: any) => ({
+                        ...entry,
+                        timestamp: new Date(entry.timestamp)
+                    }));
+                } catch (e) {
+                    console.error('Failed to load search history from cookie:', e);
+                }
             }
         }
+        // If not enabled, history stays empty (session-only mode)
     });
 
     // ============================================================================
-    // REACTIVE: SAVE SEARCH HISTORY TO LOCALSTORAGE
+    // REACTIVE: SAVE SEARCH HISTORY TO COOKIES (if enabled)
     // ============================================================================
-    $: if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('searchHistory', JSON.stringify(searchHistory));
+    $: if (typeof document !== 'undefined' && enablePersistentHistory && searchHistory.length > 0) {
+        // Save to cookie when persistent history is enabled
+        const historyJSON = JSON.stringify(searchHistory);
+        setCookie('searchHistory', encodeURIComponent(historyJSON), 365);
     }
 
     // ============================================================================
@@ -158,7 +195,68 @@
     // ============================================================================
     function clearSearchHistory() {
         searchHistory = [];
-        localStorage.removeItem('searchHistory');
+        deleteCookie('searchHistory');
+    }
+
+    // ============================================================================
+    // FUNCTION: TOGGLE PERSISTENT HISTORY
+    // ============================================================================
+    function togglePersistentHistory(event: Event) {
+        console.log('🔘 Cookie checkbox clicked!');
+
+        const checkbox = event.target as HTMLInputElement;
+        const newValue = checkbox.checked;
+
+        console.log('📊 Checkbox state:', {
+            'Current enablePersistentHistory': enablePersistentHistory,
+            'Checkbox new value (checked)': newValue,
+            'Action': newValue ? 'Attempting to ENABLE' : 'Attempting to DISABLE'
+        });
+
+        if (!newValue && enablePersistentHistory) {
+            // User is trying to disable - show custom warning modal
+            console.log('⚠️ User is trying to DISABLE persistent history - showing custom warning');
+            pendingCheckboxElement = checkbox;
+            showDisableWarning = true;
+        } else if (newValue && !enablePersistentHistory) {
+            // User is enabling - save preference
+            console.log('✅ User is ENABLING persistent history');
+            enablePersistentHistory = true;
+            setCookie('enablePersistentHistory', 'true', 365);
+            console.log('💾 Cookie preference saved, enablePersistentHistory = true');
+        } else {
+            console.log('⚡ No action needed - states already match');
+        }
+
+        console.log('📌 Final state: enablePersistentHistory =', enablePersistentHistory);
+    }
+
+    // ============================================================================
+    // FUNCTION: CONFIRM DISABLE PERSISTENT HISTORY
+    // ============================================================================
+    function confirmDisablePersistentHistory() {
+        console.log('✅ User CONFIRMED disabling - clearing history and cookies');
+        enablePersistentHistory = false;
+        // Clear all history and cookies
+        searchHistory = [];
+        deleteCookie('searchHistory');
+        deleteCookie('enablePersistentHistory');
+        console.log('🗑️ History cleared, cookies deleted, enablePersistentHistory = false');
+        showDisableWarning = false;
+        pendingCheckboxElement = null;
+    }
+
+    // ============================================================================
+    // FUNCTION: CANCEL DISABLE PERSISTENT HISTORY
+    // ============================================================================
+    function cancelDisablePersistentHistory() {
+        console.log('❌ User CANCELLED disabling - reverting checkbox to checked');
+        if (pendingCheckboxElement) {
+            pendingCheckboxElement.checked = true;
+        }
+        console.log('🔄 Checkbox reverted, enablePersistentHistory remains true');
+        showDisableWarning = false;
+        pendingCheckboxElement = null;
     }
 
     // ============================================================================
@@ -265,6 +363,31 @@
 
     let enableDateOverride: boolean = false;
     let dateFilterType: 'before' | 'after' | 'exact' = 'before';
+
+    // ============================================================================
+    // FUNCTION: VALIDATE AND CORRECT CUSTOM DATE
+    // ============================================================================
+    function validateCustomDate() {
+        if (!customDate) return;
+
+        const minDate = new Date('2005-04-23');
+        const fallbackDate = '2015-12-27'; // December 27, 2015
+        const selectedDate = new Date(customDate);
+
+        console.log('📅 Date validation:', {
+            'Selected date': customDate,
+            'Parsed date': selectedDate,
+            'Min allowed': minDate
+        });
+
+        if (selectedDate < minDate) {
+            console.log('⚠️ Date is before minimum! Auto-correcting to December 27, 2015');
+            customDate = fallbackDate;
+            console.log('✅ Date corrected to:', customDate);
+        } else {
+            console.log('✅ Date is valid');
+        }
+    }
     let enableUserTerms: boolean = false;
     let editCustomTerms: boolean = false;
 
@@ -693,12 +816,23 @@
         // Generate the filled specifier value (e.g., "XXXX" -> "1234")
         const filledSpecifier = fillSpecifierTemplate(result.specifier, result.pattern, formattedDate);
 
+        // Generate date modifier string if date override is enabled
+        let dateModifier: string | undefined = undefined;
+        if (enableDateOverride && formattedDate) {
+            const year = formattedDate.getFullYear();
+            const month = String(formattedDate.getMonth() + 1).padStart(2, '0');
+            const day = String(formattedDate.getDate()).padStart(2, '0');
+            const dateString = `${year}${month}${day}`;
+            dateModifier = `${dateFilterType}:${dateString}`;
+        }
+
         // Add to search history
         searchHistory = [{
             name: result.pattern.name,
             specifier: filledSpecifier,
             url: formattedURL,
-            timestamp: new Date()
+            timestamp: new Date(),
+            dateModifier: dateModifier
         }, ...searchHistory]; // Newest first
 
         // Open the search in a new tab
@@ -2283,6 +2417,53 @@
         gap: 0.5rem;
     }
 
+    /* === RNG MODIFIER TAB (COMING SOON) === */
+    .coming-soon-section {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4rem 2rem;
+        text-align: center;
+        min-height: 300px;
+    }
+
+    .coming-soon-icon {
+        font-size: 5rem;
+        margin-bottom: 1rem;
+        animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+        0%, 100% {
+            transform: translateY(0);
+        }
+        50% {
+            transform: translateY(-10px);
+        }
+    }
+
+    .coming-soon-section h2 {
+        font-size: 2rem;
+        margin: 0 0 1rem 0;
+        color: #333;
+    }
+
+    .coming-soon-text {
+        font-size: 1.1rem;
+        color: #666;
+        max-width: 600px;
+        line-height: 1.6;
+        margin: 0 0 1rem 0;
+    }
+
+    .coming-soon-subtext {
+        font-size: 0.95rem;
+        color: #999;
+        font-style: italic;
+        margin: 0;
+    }
+
     /* === SEARCH HISTORY TAB === */
     .history-section {
         padding: 1rem;
@@ -2318,7 +2499,33 @@
     .history-description {
         font-size: 0.9rem;
         color: #666;
-        margin: 0 0 1.5rem 0;
+        margin: 0 0 1rem 0;
+    }
+
+    .persistent-history-toggle {
+        margin-bottom: 1.5rem;
+        padding: 0.75rem;
+        background-color: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+    }
+
+    .persistent-history-toggle .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        cursor: pointer;
+        font-size: 0.95rem;
+    }
+
+    .persistent-history-toggle input[type="checkbox"] {
+        cursor: pointer;
+        width: 18px;
+        height: 18px;
+    }
+
+    .persistent-history-toggle span {
+        user-select: none;
     }
 
     .empty-history {
@@ -2381,10 +2588,128 @@
         color: #666;
     }
 
+    .history-date-modifier {
+        font-size: 0.85rem;
+        color: #0066cc;
+        font-weight: 500;
+        padding: 0.2rem 0.5rem;
+        background-color: #e6f2ff;
+        border-radius: 3px;
+        font-family: monospace;
+    }
+
     .history-timestamp {
         font-size: 0.85rem;
         color: #888;
         white-space: nowrap;
+    }
+
+    /* === CUSTOM MODAL === */
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(0, 0, 0, 0.6);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+        animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
+    }
+
+    .modal-content {
+        background-color: white;
+        border: 3px solid black;
+        border-radius: 8px;
+        max-width: 500px;
+        width: 90%;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        animation: slideIn 0.2s ease;
+    }
+
+    @keyframes slideIn {
+        from {
+            transform: translateY(-20px);
+            opacity: 0;
+        }
+        to {
+            transform: translateY(0);
+            opacity: 1;
+        }
+    }
+
+    .modal-header {
+        padding: 1.5rem;
+        border-bottom: 2px solid black;
+        background-color: #fff3cd;
+    }
+
+    .modal-header h3 {
+        margin: 0;
+        font-size: 1.5rem;
+        color: #856404;
+    }
+
+    .modal-body {
+        padding: 1.5rem;
+    }
+
+    .modal-body p {
+        margin: 0.5rem 0;
+        font-size: 1rem;
+        line-height: 1.5;
+    }
+
+    .modal-body p:last-child {
+        margin-top: 1rem;
+    }
+
+    .modal-footer {
+        padding: 1rem 1.5rem;
+        border-top: 2px solid black;
+        display: flex;
+        justify-content: flex-end;
+        gap: 1rem;
+        background-color: #f8f9fa;
+    }
+
+    .modal-button {
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+        font-weight: 600;
+        border: 2px solid black;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .modal-cancel {
+        background-color: white;
+        color: black;
+    }
+
+    .modal-cancel:hover {
+        background-color: #e9ecef;
+    }
+
+    .modal-confirm {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    .modal-confirm:hover {
+        background-color: #c82333;
     }
 </style>
 
@@ -2447,6 +2772,13 @@
                     on:click={() => activeTab = 'filters'}
                 >
                     Filters
+                </button>
+                <button
+                    class="advanced-tab"
+                    class:active={activeTab === 'rng'}
+                    on:click={() => activeTab = 'rng'}
+                >
+                    RNG Modifier
                 </button>
                 <button
                     class="advanced-tab"
@@ -2601,11 +2933,29 @@
                                     type="date"
                                     class="filter-select"
                                     bind:value={customDate}
+                                    on:change={validateCustomDate}
+                                    min="2005-04-23"
+                                    title="YouTube's first video was uploaded on April 23, 2005"
                                 />
                             </div>
                             {/if}
                         </div>
 
+                    </div>
+                </div>
+                {/if}
+
+                <!-- RNG MODIFIER TAB -->
+                {#if activeTab === 'rng'}
+                <div class="tab-panel">
+                    <div class="coming-soon-section">
+                        <div class="coming-soon-icon">🎲</div>
+                        <h2>RNG Modifier</h2>
+                        <p class="coming-soon-text">
+                            This feature is coming soon! You'll be able to modify how random specifiers are generated,
+                            allowing for some really wacky and fun search results.
+                        </p>
+                        <p class="coming-soon-subtext">Stay tuned for updates!</p>
                     </div>
                 </div>
                 {/if}
@@ -2620,7 +2970,24 @@
                                 ↻ Clear History
                             </button>
                         </div>
-                        <p class="history-description">Your search history for this session</p>
+                        <p class="history-description">
+                            {#if enablePersistentHistory}
+                                Your search history is saved persistently via cookies
+                            {:else}
+                                Your search history is only saved for this session
+                            {/if}
+                        </p>
+
+                        <div class="persistent-history-toggle">
+                            <label class="checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    checked={enablePersistentHistory}
+                                    on:change={togglePersistentHistory}
+                                />
+                                <span>Save search history across sessions (uses cookies)</span>
+                            </label>
+                        </div>
 
                         {#if searchHistory.length === 0}
                             <div class="empty-history">
@@ -2646,6 +3013,9 @@
                                         <div class="history-term">
                                             <span class="history-name">{entry.name}</span>
                                             <span class="history-specifier">{entry.specifier}</span>
+                                            {#if entry.dateModifier}
+                                                <span class="history-date-modifier">{entry.dateModifier}</span>
+                                            {/if}
                                         </div>
                                         <div class="history-timestamp">{formattedTime}</div>
                                     </button>
@@ -3090,5 +3460,29 @@
             </div>
         </div>
         {/if}
+
+    <!-- Custom Warning Modal for Disabling Persistent History -->
+    {#if showDisableWarning}
+        <div class="modal-overlay" on:click={cancelDisablePersistentHistory}>
+            <div class="modal-content" on:click={(e) => e.stopPropagation()}>
+                <div class="modal-header">
+                    <h3>⚠️ Warning</h3>
+                </div>
+                <div class="modal-body">
+                    <p>Disabling persistent history will clear all your saved search history.</p>
+                    <p>Your searches will only be stored for this session.</p>
+                    <p><strong>Are you sure you want to continue?</strong></p>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-button modal-cancel" on:click={cancelDisablePersistentHistory}>
+                        Cancel
+                    </button>
+                    <button class="modal-button modal-confirm" on:click={confirmDisablePersistentHistory}>
+                        Yes, Disable
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
 
 </main>
