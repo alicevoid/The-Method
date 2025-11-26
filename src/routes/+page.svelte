@@ -23,6 +23,8 @@
     import { base } from '$app/paths';
     import { onMount } from 'svelte';
     import { loadAllSearchTerms, formatSearchTermToURL, fillSpecifierTemplate, type SearchPattern } from '$lib';
+    import { generateConstrainedDate, debugDistribution } from '$lib/randomness';
+    import Chart from 'chart.js/auto';
 
     // ============================================================================
     // DATA STRUCTURE: FULL LIST OF SEARCH TERM OBJECTS
@@ -115,6 +117,54 @@
     let activeTab: 'filters' | 'rng' | 'history' | 'custom' | 'lookup' = 'filters';
 
     // ============================================================================
+    // STATE: RANDOMNESS MODE (for Randomness tab)
+    // ============================================================================
+
+    // Types for distribution configuration
+    type DistributionType = 'uniform' | 'bell' | 'z-curve' | 't-curve';
+
+    interface DistributionConfig {
+        type: DistributionType;
+        center: number;      // 0-1 (percentage of range)
+        spread: number;      // 0-1 (relative spread)
+        degreesOfFreedom?: number;  // For t-curve (1-30)
+    }
+
+    // Master randomness toggle
+    let enableRandomnessMode = false;
+
+    // Individual graph enable toggles
+    let enableIntegerGraph = true;
+    let enableDateGraph = true;
+
+    // Integer distribution config
+    let integerDistConfig: DistributionConfig = {
+        type: 'bell',
+        center: 0.5,     // Middle of range (50%)
+        spread: 0.25,    // Default spread (25%)
+        degreesOfFreedom: 5
+    };
+
+    // Date distribution config
+    let dateDistConfig: DistributionConfig = {
+        type: 'bell',
+        center: 0.5,     // Middle of date range (50%)
+        spread: 0.2,     // Default spread (20%)
+        degreesOfFreedom: 5
+    };
+
+    // Chart.js instances
+    let integerChart: Chart | null = null;
+    let dateChart: Chart | null = null;
+    let chartsInitialized = false;
+
+    // Drag state for graph interaction
+    let isDragging = false;
+    let dragGraphType: 'integer' | 'date' | null = null;
+    let lastMouseX = 0;
+    let lastMouseY = 0;
+
+    // ============================================================================
     // STATE: SEARCH HISTORY (for Search History tab)
     // ============================================================================
 
@@ -178,8 +228,59 @@
                 }
             }
         }
-        // If not enabled, history stays empty (session-only mode)
+
+        // Add global mouse event listeners for dragging
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+        console.log('Mouse event listeners attached');
+
+        // Cleanup on unmount
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+            if (integerChart) integerChart.destroy();
+            if (dateChart) dateChart.destroy();
+            console.log('Cleanup: event listeners and charts removed');
+        };
     });
+
+    // ============================================================================
+    // REACTIVE: INITIALIZE CHARTS WHEN RANDOMNESS TAB BECOMES ACTIVE
+    // ============================================================================
+    $: if (typeof document !== 'undefined' && activeTab === 'rng') {
+        setTimeout(() => initializeCharts(), 50);
+    }
+
+    // ============================================================================
+    // REACTIVE: UPDATE CHARTS WHEN DISTRIBUTION CONFIGS CHANGE
+    // ============================================================================
+    $: if (integerChart && integerDistConfig) {
+        const data = Array.from({length: 101}, (_, i) => {
+            const x = i / 100;
+            const distance = Math.abs(x - integerDistConfig.center);
+            const spread = Math.max(integerDistConfig.spread, 0.05);
+            return Math.exp(-Math.pow(distance / spread, 2) * 5);
+        });
+
+        integerChart.data.datasets[0].data = data;
+        integerChart.update('none');
+    }
+
+    $: if (dateChart && dateDistConfig) {
+        const startDate = new Date('2005-12-31');
+        const today = new Date();
+        const daysSinceStart = Math.floor((today.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+
+        const data = Array.from({length: daysSinceStart + 1}, (_, i) => {
+            const x = i / daysSinceStart;
+            const distance = Math.abs(x - dateDistConfig.center);
+            const spread = Math.max(dateDistConfig.spread, 0.05);
+            return Math.exp(-Math.pow(distance / spread, 2) * 5);
+        });
+
+        dateChart.data.datasets[0].data = data;
+        dateChart.update('none');
+    }
 
     // ============================================================================
     // REACTIVE: SAVE SEARCH HISTORY TO COOKIES (if enabled)
@@ -727,55 +828,309 @@
     
     // Picks a random day if you dont override the date
     function randomSpecDay(pattern: SearchPattern): Date {
-        const today = new Date();       
-        let randomDays = 0;
-        
-        // Determine the range based on age filter
-        if (selectedAge === 'any') {
-            console.log('Selected age: any');
-            if (pattern.age === 'old') {
-                console.log('Random day selected for old pattern');
-                randomDays = Math.floor(Math.random() * 3650); // Random day within the last 10 years
-            } else if (pattern.age === 'new') {
-                console.log('Random day selected for new pattern');
-                randomDays = Math.floor(Math.random() * 365); // Random day within the last year
-            }
-        } else if (selectedAge === 'old') {
-            console.log('Selected age: old');
-            randomDays = Math.floor(Math.random() * 3650); // Random day within the last 10 years
-        } else if (selectedAge === 'new') {
-            console.log('Selected age: new');
-            randomDays = Math.floor(Math.random() * 365); // Random day within the last year
+        const today = new Date();
+
+        // Handle exact date constraint
+        if (pattern.dateExact) {
+            return new Date(pattern.dateExact);
         }
 
-        // Respect any "date-before" or "date-after" tags
+        // Determine date range based on constraints and age filter
+        let startDate: Date;
+        let endDate: Date = today;
+
         if (pattern.dateBefore) {
-            const constraintDate = new Date(pattern.dateBefore);
-            const diffTime = Math.abs(today.getTime() - constraintDate.getTime());
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-            randomDays = Math.floor(Math.random() * diffDays);
-            today.setDate(today.getDate() - randomDays);
-            console.log('Date before constraint applied:', today);
-            return today;
-        } 
-        else if (pattern.dateAfter) {
-            const constraintDate = new Date(pattern.dateAfter);
-            const diffTime = Math.abs(constraintDate.getTime() - today.getTime());
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-            randomDays = Math.floor(Math.random() * diffDays);
-            today.setDate(constraintDate.getDate() + randomDays);
-            console.log('Date after constraint applied:', today);
-            return today;
-        }
-        else if (pattern.dateExact) {
-            const exactDate = new Date(pattern.dateExact);
-            console.log('Exact date constraint applied:', exactDate);
-            return exactDate;
+            endDate = new Date(pattern.dateBefore);
+            startDate = new Date('2005-12-31'); // YouTube start date
+        } else if (pattern.dateAfter) {
+            startDate = new Date(pattern.dateAfter);
+            endDate = today;
+        } else {
+            // Determine range based on age filter
+            if (selectedAge === 'any') {
+                if (pattern.age === 'old') {
+                    // Last 10 years for old content
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 3650);
+                } else if (pattern.age === 'new') {
+                    // Last year for new content
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 365);
+                } else {
+                    // Default: YouTube start to today
+                    startDate = new Date('2005-12-31');
+                }
+            } else if (selectedAge === 'old') {
+                startDate = new Date(today);
+                startDate.setDate(startDate.getDate() - 3650);
+            } else if (selectedAge === 'new') {
+                startDate = new Date(today);
+                startDate.setDate(startDate.getDate() - 365);
+            } else {
+                startDate = new Date('2005-12-31');
+            }
         }
 
-        today.setDate(today.getDate() - randomDays);
-        console.log('Random date selected:', today);
-        return today;
+        // Use randomness distribution if enabled
+        if (enableRandomnessMode && enableDateGraph) {
+            return generateConstrainedDate(startDate, endDate, dateDistConfig);
+        }
+
+        // Fall back to uniform random
+        const diffTime = endDate.getTime() - startDate.getTime();
+        const randomTime = startDate.getTime() + Math.random() * diffTime;
+        return new Date(randomTime);
+    }
+
+    // ============================================================================
+    // FUNCTIONS: CHART INITIALIZATION
+    // ============================================================================
+
+    function initializeCharts() {
+        if (chartsInitialized) return;
+
+        const integerCanvas = document.getElementById('integerGraph') as HTMLCanvasElement;
+        const dateCanvas = document.getElementById('dateGraph') as HTMLCanvasElement;
+
+        if (!integerCanvas && !dateCanvas) return;
+
+        // Calculate days since 12/31/2005
+        const startDate = new Date('2005-12-31');
+        const today = new Date();
+        const daysSinceStart = Math.floor((today.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (integerCanvas) {
+            const integerData = Array.from({length: 101}, (_, i) => {
+                const x = i / 100;
+                const distance = Math.abs(x - integerDistConfig.center);
+                const spread = Math.max(integerDistConfig.spread, 0.05);
+                return Math.exp(-Math.pow(distance / spread, 2) * 5);
+            });
+
+            integerChart = new Chart(integerCanvas, {
+                type: 'line',
+                data: {
+                    labels: Array.from({length: 101}, (_, i) => i),
+                    datasets: [{
+                        label: 'Probability Density',
+                        data: integerData,
+                        borderColor: '#FF00FF',
+                        backgroundColor: 'rgba(255, 0, 255, 0.4)',
+                        borderWidth: 4,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 0,
+                        segment: {
+                            borderColor: '#FF00FF',
+                            backgroundColor: 'rgba(255, 0, 255, 0.4)'
+                        }
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: { mode: 'none' },
+                    plugins: {
+                        legend: { display: false },
+                        title: { display: false },
+                        tooltip: { enabled: false },
+                        filler: { propagate: true }
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Percentage (0% - 100%)',
+                                color: '#000',
+                                font: { size: 14, weight: 'bold' }
+                            },
+                            grid: {
+                                display: true,
+                                drawOnChartArea: true,
+                                color: (ctx) => ctx.tick.value % 5 === 0 ? '#00000066' : '#00000019'
+                            },
+                            ticks: {
+                                color: '#000',
+                                callback: (val) => val + '%',
+                                stepSize: 5
+                            },
+                            min: 0,
+                            max: 100
+                        },
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Probability Density',
+                                color: '#000',
+                                font: { size: 14, weight: 'bold' }
+                            },
+                            grid: {
+                                display: true,
+                                color: '#00000019'
+                            },
+                            ticks: {
+                                color: '#000',
+                                callback: (val) => typeof val === 'number' ? val.toFixed(2) : val
+                            },
+                            min: 0,
+                            max: 1.2
+                        }
+                    }
+                }
+            });
+        }
+
+        if (dateCanvas) {
+            // Generate year labels from 2006 to present
+            const years = [];
+            const yearPositions = [];
+            for (let year = 2006; year <= today.getFullYear(); year++) {
+                years.push(year);
+                const yearDate = new Date(year, 0, 1);
+                const daysFromStart = Math.floor((yearDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+                yearPositions.push(daysFromStart);
+            }
+
+            const dateData = Array.from({length: daysSinceStart + 1}, (_, i) => {
+                const x = i / daysSinceStart;
+                const distance = Math.abs(x - dateDistConfig.center);
+                const spread = Math.max(dateDistConfig.spread, 0.05);
+                return Math.exp(-Math.pow(distance / spread, 2) * 5);
+            });
+
+            dateChart = new Chart(dateCanvas, {
+                type: 'line',
+                data: {
+                    labels: Array.from({length: daysSinceStart + 1}, (_, i) => i),
+                    datasets: [{
+                        label: 'Probability Density',
+                        data: dateData,
+                        borderColor: '#FF00FF',
+                        backgroundColor: 'rgba(255, 0, 255, 0.4)',
+                        borderWidth: 4,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 0,
+                        segment: {
+                            borderColor: '#FF00FF',
+                            backgroundColor: 'rgba(255, 0, 255, 0.4)'
+                        }
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: { mode: 'none' },
+                    plugins: {
+                        legend: { display: false },
+                        title: { display: false },
+                        tooltip: { enabled: false },
+                        filler: { propagate: true }
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '12/31/2005 → Today',
+                                color: '#000',
+                                font: { size: 14, weight: 'bold' }
+                            },
+                            grid: {
+                                display: true,
+                                drawOnChartArea: true,
+                                color: (ctx) => yearPositions.includes(ctx.tick.value) ? '#00000080' : '#00000019'
+                            },
+                            ticks: {
+                                color: '#000',
+                                callback: (val) => {
+                                    const idx = yearPositions.indexOf(val as number);
+                                    return idx >= 0 ? years[idx].toString() : '';
+                                },
+                                autoSkip: false,
+                                maxRotation: 45,
+                                minRotation: 45
+                            },
+                            min: 0,
+                            max: daysSinceStart
+                        },
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Probability Density',
+                                color: '#000',
+                                font: { size: 14, weight: 'bold' }
+                            },
+                            grid: {
+                                display: true,
+                                color: '#00000019'
+                            },
+                            ticks: {
+                                color: '#000',
+                                callback: (val) => typeof val === 'number' ? val.toFixed(2) : val
+                            },
+                            min: 0,
+                            max: 1.2
+                        }
+                    }
+                }
+            });
+        }
+
+        if (integerChart || dateChart) {
+            chartsInitialized = true;
+        }
+    }
+
+    // ============================================================================
+    // FUNCTIONS: GRAPH INTERACTION HANDLERS
+    // ============================================================================
+
+    function handleMouseDown(e: MouseEvent, graphType: 'integer' | 'date') {
+        isDragging = true;
+        dragGraphType = graphType;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+    }
+
+    function handleMouseMove(e: MouseEvent) {
+        if (!isDragging || !dragGraphType) return;
+
+        const deltaX = e.clientX - lastMouseX;
+        const deltaY = e.clientY - lastMouseY;
+
+        if (dragGraphType === 'integer') {
+            integerDistConfig.center += deltaX * 0.001;
+            integerDistConfig.center = Math.max(0, Math.min(1, integerDistConfig.center));
+            integerDistConfig.spread -= deltaY * 0.001;
+            integerDistConfig.spread = Math.max(0.05, Math.min(0.5, integerDistConfig.spread));
+            integerDistConfig = { ...integerDistConfig };
+        } else if (dragGraphType === 'date') {
+            dateDistConfig.center += deltaX * 0.001;
+            dateDistConfig.center = Math.max(0, Math.min(1, dateDistConfig.center));
+            dateDistConfig.spread -= deltaY * 0.001;
+            dateDistConfig.spread = Math.max(0.05, Math.min(0.5, dateDistConfig.spread));
+            dateDistConfig = { ...dateDistConfig };
+        }
+
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+    }
+
+    function handleMouseUp() {
+        if (isDragging) {
+            isDragging = false;
+            dragGraphType = null;
+        }
     }
 
     // ============================================================================
@@ -809,7 +1164,8 @@
         console.log('Active search terms count:', activeCount);
 
         // Format the search term into a YouTube URL
-        const formattedURL = formatSearchTermToURL(result.pattern, result.specifier, formattedDate, enableDateOverride);
+        const integerConfig = (enableRandomnessMode && enableIntegerGraph) ? integerDistConfig : undefined;
+        const formattedURL = formatSearchTermToURL(result.pattern, result.specifier, formattedDate, enableDateOverride, integerConfig);
 
         console.log('Opening YouTube search:', formattedURL);
 
@@ -2417,51 +2773,158 @@
         gap: 0.5rem;
     }
 
-    /* === RNG MODIFIER TAB (COMING SOON) === */
-    .coming-soon-section {
+    /* === RANDOMNESS TAB === */
+    .randomness-section {
+        padding: 1.5rem;
         display: flex;
         flex-direction: column;
+        gap: 1.5rem;
+    }
+
+    .randomness-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+        padding: 1rem;
+        background-color: #f9f9f9;
+        border: 2px solid black;
+        border-radius: 0.5rem;
+    }
+
+    .checkbox-label {
+        display: flex;
         align-items: center;
-        justify-content: center;
-        padding: 4rem 2rem;
-        text-align: center;
-        min-height: 300px;
+        gap: 0.5rem;
+        cursor: pointer;
+        font-weight: bold;
     }
 
-    .coming-soon-icon {
-        font-size: 5rem;
-        margin-bottom: 1rem;
-        animation: float 3s ease-in-out infinite;
+    .checkbox-label input[type="checkbox"] {
+        cursor: pointer;
+        width: 18px;
+        height: 18px;
     }
 
-    @keyframes float {
-        0%, 100% {
-            transform: translateY(0);
+    .graphs-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+    }
+
+    @media (max-width: 960px) {
+        .graphs-container {
+            grid-template-columns: 1fr;
         }
-        50% {
-            transform: translateY(-10px);
-        }
     }
 
-    .coming-soon-section h2 {
-        font-size: 2rem;
-        margin: 0 0 1rem 0;
+    .distribution-selector {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .distribution-selector label {
+        font-weight: bold;
+        font-size: 0.9rem;
+    }
+
+    .distribution-selector select {
+        padding: 0.4rem 0.8rem;
+        font-size: 0.9rem;
+        border: 2px solid black;
+        border-radius: 0.25rem;
+        background-color: white;
+        cursor: pointer;
+    }
+
+    .graph-container {
+        padding: 1rem;
+        border: 2px solid black;
+        border-radius: 0.5rem;
+        background-color: white;
+    }
+
+    .graph-container.disabled {
+        opacity: 0.5;
+        pointer-events: none;
+        background-color: #f5f5f5;
+    }
+
+    .graph-container h3 {
+        margin: 0 0 0.5rem 0;
+        font-size: 1.1rem;
         color: #333;
     }
 
-    .coming-soon-text {
-        font-size: 1.1rem;
+    .graph-description {
+        margin: 0 0 0.75rem 0;
+        font-size: 0.85rem;
         color: #666;
-        max-width: 600px;
-        line-height: 1.6;
-        margin: 0 0 1rem 0;
+        font-style: italic;
     }
 
-    .coming-soon-subtext {
-        font-size: 0.95rem;
+    .graph-canvas-wrapper {
+        position: relative;
+        height: 300px;
+        cursor: grab;
+        user-select: none;
+        background-color: white;
+    }
+
+    .graph-canvas-wrapper:active {
+        cursor: grabbing;
+    }
+
+    .graph-canvas-wrapper canvas {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    .graph-info {
+        display: flex;
+        gap: 2rem;
+        justify-content: center;
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid #ddd;
+    }
+
+    .graph-info p {
+        margin: 0;
+        font-size: 0.9rem;
+        font-weight: bold;
+        color: #555;
+    }
+
+    .disabled-notice {
+        text-align: center;
+        padding: 2rem;
+        font-size: 1.1rem;
         color: #999;
         font-style: italic;
-        margin: 0;
+    }
+
+    .debug-button {
+        margin-top: 1rem;
+        padding: 0.6rem 1rem;
+        background-color: #333;
+        color: white;
+        border: 2px solid black;
+        border-radius: 0.25rem;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: bold;
+        width: 100%;
+        transition: background-color 0.2s;
+    }
+
+    .debug-button:hover {
+        background-color: #555;
+    }
+
+    .debug-button:active {
+        background-color: #111;
     }
 
     /* === SEARCH HISTORY TAB === */
@@ -2778,7 +3241,7 @@
                     class:active={activeTab === 'rng'}
                     on:click={() => activeTab = 'rng'}
                 >
-                    RNG Modifier
+                    Randomness
                 </button>
                 <button
                     class="advanced-tab"
@@ -2945,17 +3408,121 @@
                 </div>
                 {/if}
 
-                <!-- RNG MODIFIER TAB -->
+                <!-- RANDOMNESS TAB -->
                 {#if activeTab === 'rng'}
-                <div class="tab-panel">
-                    <div class="coming-soon-section">
-                        <div class="coming-soon-icon">🎲</div>
-                        <h2>RNG Modifier</h2>
-                        <p class="coming-soon-text">
-                            This feature is coming soon! You'll be able to modify how random specifiers are generated,
-                            allowing for some really wacky and fun search results.
-                        </p>
-                        <p class="coming-soon-subtext">Stay tuned for updates!</p>
+                <div class="tab-panel randomness-tab">
+                    <div class="randomness-section">
+
+                        <!-- Master Controls -->
+                        <div class="randomness-controls">
+                            <label class="checkbox-label">
+                                <input type="checkbox" bind:checked={enableRandomnessMode} />
+                                <span>Enable Randomness Mode</span>
+                            </label>
+
+                            <label class="checkbox-label">
+                                <input type="checkbox" bind:checked={enableIntegerGraph} />
+                                <span>Enable Integer Distribution</span>
+                            </label>
+
+                            <label class="checkbox-label">
+                                <input type="checkbox" bind:checked={enableDateGraph} />
+                                <span>Enable Date Distribution</span>
+                            </label>
+                        </div>
+
+                        <!-- Graphs Container -->
+                        <div class="graphs-container">
+
+                            <!-- Integer Distribution Graph -->
+                            {#if enableIntegerGraph}
+                            <div class="graph-container">
+                                <h3>Integer Specifier Distribution</h3>
+                                <div class="distribution-selector">
+                                    <label for="integer-distribution-type">Distribution:</label>
+                                    <select
+                                        id="integer-distribution-type"
+                                        bind:value={integerDistConfig.type}
+                                        on:change={() => { integerDistConfig = {...integerDistConfig}; }}
+                                    >
+                                        <option value="uniform">Uniform (Flat)</option>
+                                        <option value="bell">Bell Curve (Normal)</option>
+                                        <option value="z-curve">Z-Curve (Standard Normal)</option>
+                                        <option value="t-curve">T-Curve (Heavy Tails)</option>
+                                    </select>
+                                </div>
+                                <p class="graph-description">Drag left/right to move center, up/down to adjust spread</p>
+                                <div
+                                    class="graph-canvas-wrapper"
+                                    on:mousedown={(e) => handleMouseDown(e, 'integer')}
+                                    role="button"
+                                    tabindex="0"
+                                >
+                                    <canvas id="integerGraph"></canvas>
+                                </div>
+                                <div class="graph-info">
+                                    <p>Center: {(integerDistConfig.center * 100).toFixed(1)}%</p>
+                                    <p>Spread: {(integerDistConfig.spread * 100).toFixed(1)}%</p>
+                                </div>
+                                <button
+                                    class="debug-button"
+                                    on:click={() => debugDistribution(integerDistConfig, 0, 9999)}
+                                >
+                                    🐛 Debug Integer Distribution
+                                </button>
+                            </div>
+                            {/if}
+
+                            <!-- Date Distribution Graph -->
+                            {#if enableDateGraph}
+                            <div class="graph-container" class:disabled={enableDateOverride}>
+                                <h3>Date Distribution</h3>
+                                {#if enableDateOverride}
+                                    <p class="disabled-notice">⚠️ Disabled (Custom Date Override Active)</p>
+                                {:else}
+                                    <div class="distribution-selector">
+                                        <label for="date-distribution-type">Distribution:</label>
+                                        <select
+                                            id="date-distribution-type"
+                                            bind:value={dateDistConfig.type}
+                                            on:change={() => { dateDistConfig = {...dateDistConfig}; }}
+                                        >
+                                            <option value="uniform">Uniform (Flat)</option>
+                                            <option value="bell">Bell Curve (Normal)</option>
+                                            <option value="z-curve">Z-Curve (Standard Normal)</option>
+                                            <option value="t-curve">T-Curve (Heavy Tails)</option>
+                                        </select>
+                                    </div>
+                                    <p class="graph-description">Drag left/right to move center, up/down to adjust spread</p>
+                                    <div
+                                        class="graph-canvas-wrapper"
+                                        on:mousedown={(e) => handleMouseDown(e, 'date')}
+                                        role="button"
+                                        tabindex="0"
+                                    >
+                                        <canvas id="dateGraph"></canvas>
+                                    </div>
+                                    <div class="graph-info">
+                                        <p>Center: {(dateDistConfig.center * 100).toFixed(1)}%</p>
+                                        <p>Spread: {(dateDistConfig.spread * 100).toFixed(1)}%</p>
+                                    </div>
+                                    <button
+                                        class="debug-button"
+                                        on:click={() => {
+                                            const startDate = new Date('2005-12-31');
+                                            const today = new Date();
+                                            const daysSinceStart = Math.floor((today.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+                                            debugDistribution(dateDistConfig, 0, daysSinceStart);
+                                        }}
+                                    >
+                                        🐛 Debug Date Distribution
+                                    </button>
+                                {/if}
+                            </div>
+                            {/if}
+
+                        </div>
+
                     </div>
                 </div>
                 {/if}

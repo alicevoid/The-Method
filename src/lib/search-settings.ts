@@ -20,6 +20,8 @@
 
 // Import types from method-logic
 import type { SearchPattern, Constraint } from './method-logic.js';
+import type { DistributionConfig } from './randomness.js';
+import { generateConstrainedInteger } from './randomness.js';
 
 // ============================================================================
 // NEW PUBLIC API: SEARCH TERM FORMATTING
@@ -36,17 +38,20 @@ import type { SearchPattern, Constraint } from './method-logic.js';
  * @param pattern - The search pattern object to format
  * @param specifier - The specific specifier to use from pattern.specifiers
  * @param formattedDate - The date from +page.svelte randomSpecDay()
+ * @param dateOverride - Whether custom date override is enabled
+ * @param integerDistConfig - Optional distribution config for integer generation
  * @returns Complete YouTube search URL ready to open
  */
 export function formatSearchTermToURL(
   pattern: SearchPattern,
   specifier: string,
   formattedDate: Date,
-  dateOverride: boolean
+  dateOverride: boolean,
+  integerDistConfig?: DistributionConfig
 ): string {
 
   // Step 1: Pattern-match to generate the search term (name + filled specifier)
-  let searchTerm = generateSearchTerm(pattern.name, specifier, pattern, formattedDate);
+  let searchTerm = generateSearchTerm(pattern.name, specifier, pattern, formattedDate, integerDistConfig);
 
   // Step 1.5: Add Quotes around the entire Search Term to force exact match
   searchTerm = `"${searchTerm}"`;
@@ -82,13 +87,15 @@ export function formatSearchTermToURL(
  * @param specifier - The specifier template (e.g., "YYYY MM DD", "XXXX")
  * @param pattern - The SearchPattern object for constraints
  * @param formattedDate - The date to use when filling in date placeholders
+ * @param integerDistConfig - Optional distribution config for integer generation
  * @returns Complete search term (name + filled specifier)
  */
 function generateSearchTerm(
   name: string,
   specifier: string,
   pattern: SearchPattern,
-  formattedDate: Date
+  formattedDate: Date,
+  integerDistConfig?: DistributionConfig
 ): string {
   // If no specifier, just return the name
   if (!specifier || specifier === '') {
@@ -96,7 +103,7 @@ function generateSearchTerm(
   }
 
   // Generate the specifier value by filling in template placeholders
-  const specifierValue = fillSpecifierTemplate(specifier, pattern, formattedDate);
+  const specifierValue = fillSpecifierTemplate(specifier, pattern, formattedDate, integerDistConfig);
 
   // Combine name + specifier
   return specifierValue ? `${name}${specifierValue}` : name;
@@ -108,11 +115,13 @@ function generateSearchTerm(
  * - YYYY MM DD -> 2024 03 15
  * - XXXX -> 1234
  * - HHMMSS -> 143059
+ * @param integerDistConfig - Optional distribution config for integer generation
  */
 export function fillSpecifierTemplate(
   specifier: string,
   pattern: SearchPattern,
-  formattedDate: Date
+  formattedDate: Date,
+  integerDistConfig?: DistributionConfig
 ): string {
   if (!specifier || specifier === '') return '';
 
@@ -230,14 +239,20 @@ export function fillSpecifierTemplate(
         let replacement: string;
 
         if (constraintType === 'letter') {
-          const randomNum = getRandomInt(min, max);
+          const randomNum = integerDistConfig
+            ? generateConstrainedInteger(min, max, integerDistConfig)
+            : getRandomInt(min, max);
           replacement = String.fromCharCode(randomNum);
         } else if (constraintType === 'hex') {
-          const randomNum = getRandomInt(min, max);
+          const randomNum = integerDistConfig
+            ? generateConstrainedInteger(min, max, integerDistConfig)
+            : getRandomInt(min, max);
           replacement = randomNum.toString(16).toUpperCase();
         } else {
           // Default: number
-          const randomNum = getRandomInt(min, max);
+          const randomNum = integerDistConfig
+            ? generateConstrainedInteger(min, max, integerDistConfig)
+            : getRandomInt(min, max);
           replacement = randomNum.toString();
         }
 
