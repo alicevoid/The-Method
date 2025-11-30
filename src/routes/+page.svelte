@@ -114,7 +114,7 @@
     // ============================================================================
 
     let showAdvancedSettings: boolean = false;
-    let activeTab: 'filters' | 'rng' | 'history' | 'custom' | 'lookup' = 'filters';
+    let activeTab: 'general' | 'filters' | 'rng' | 'history' | 'custom' | 'lookup' = 'general';
 
     // ============================================================================
     // STATE: RANDOMNESS MODE (for Randomness tab)
@@ -156,6 +156,10 @@
     // Date range for date distribution graph
     const distributionStartDate = new Date('2005-12-31');
     const distributionEndDate = new Date();
+
+    // Refresh keys for sample previews (increment to regenerate samples)
+    let integerSampleRefreshKey = 0;
+    let dateSampleRefreshKey = 0;
 
     // Drag state for graph interaction
     let isDragging = false;
@@ -2816,7 +2820,10 @@
 
     .preview-refresh-btn:hover {
         background: rgba(220, 38, 38, 0.2);
-        transform: rotate(180deg);
+    }
+
+    .preview-refresh-btn:active {
+        transform: scale(0.95);
     }
 
     .preview-samples {
@@ -2932,6 +2939,51 @@
         background: rgba(220, 38, 38, 0.05);
         border-left: 3px solid rgba(220, 38, 38, 0.3);
         border-radius: 0.25rem;
+    }
+
+    /* General Tab - Coming Soon */
+    .coming-soon-container {
+        text-align: center;
+        padding: 3rem 2rem;
+        max-width: 600px;
+        margin: 0 auto;
+    }
+
+    .coming-soon-container h3 {
+        font-size: 2rem;
+        margin-bottom: 1rem;
+        color: #333;
+    }
+
+    .coming-soon-message {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: rgba(220, 38, 38, 0.9);
+        margin-bottom: 1.5rem;
+    }
+
+    .coming-soon-description {
+        font-size: 1rem;
+        color: #666;
+        margin-bottom: 1rem;
+    }
+
+    .coming-soon-list {
+        list-style: none;
+        padding: 0;
+        text-align: left;
+        display: inline-block;
+        margin-top: 1.5rem;
+    }
+
+    .coming-soon-list li {
+        font-size: 1.1rem;
+        padding: 0.75rem 1.5rem;
+        margin: 0.5rem 0;
+        background: rgba(220, 38, 38, 0.05);
+        border-left: 4px solid rgba(220, 38, 38, 0.3);
+        border-radius: 0.25rem;
+        color: #555;
     }
 
     .disabled-notice {
@@ -3273,6 +3325,13 @@
             <div class="advanced-tabs-bar">
                 <button
                     class="advanced-tab"
+                    class:active={activeTab === 'general'}
+                    on:click={() => activeTab = 'general'}
+                >
+                    General
+                </button>
+                <button
+                    class="advanced-tab"
                     class:active={activeTab === 'filters'}
                     on:click={() => activeTab = 'filters'}
                 >
@@ -3310,6 +3369,19 @@
 
             <!-- Tab Content Panels -->
             <div class="advanced-tab-content">
+
+                <!-- GENERAL TAB -->
+                {#if activeTab === 'general'}
+                <div class="tab-panel general-tab">
+                    <div class="coming-soon-container">
+                        <h3>General Settings</h3>
+                        <p class="coming-soon-message">Coming Soon</p>
+                        <p class="coming-soon-description">
+                            Site-wide theming and preferences will be available here.
+                        </p>
+                    </div>
+                </div>
+                {/if}
 
                 <!-- FILTERS TAB -->
                 {#if activeTab === 'filters'}
@@ -3610,25 +3682,28 @@
                                         <span class="preview-title">Sample Preview:</span>
                                         <button
                                             class="preview-refresh-btn"
-                                            on:click={() => integerDistConfig = {...integerDistConfig}}
+                                            on:click={() => integerSampleRefreshKey++}
                                         >
                                             ↻ Refresh
                                         </button>
                                     </div>
                                     <div class="preview-samples">
-                                        {#each Array.from({length: 10}, (_, i) => {
-                                            // Generate random digit count (2-4 digits) based on distribution
-                                            const digitCount = Math.floor(generateConstrainedInteger(2, 4, integerDistConfig));
-                                            const min = Math.pow(10, digitCount - 1);
-                                            const max = Math.pow(10, digitCount) - 1;
-                                            const val = Math.round(generateConstrainedInteger(min, max, integerDistConfig));
-                                            return val;
-                                        }) as sample}
-                                            <span class="sample-value">{sample}</span>
+                                        {#key integerSampleRefreshKey + JSON.stringify(integerDistConfig)}
+                                        {#each [1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4] as digitCount}
+                                            <span class="sample-value">
+                                                {(() => {
+                                                    // Apply distribution to each digit range independently
+                                                    // 0% = min of range, 100% = max of range
+                                                    const min = digitCount === 1 ? 0 : Math.pow(10, digitCount - 1);
+                                                    const max = Math.pow(10, digitCount) - 1;
+                                                    return generateConstrainedInteger(min, max, integerDistConfig);
+                                                })()}
+                                            </span>
                                         {/each}
+                                        {/key}
                                     </div>
                                     <p class="preview-description">
-                                        Random numbers your distribution would generate (XX-XXXX range)
+                                        Sample integer specifiers (X, XX, XXX, XXXX)
                                     </p>
                                 </div>
 
@@ -3785,25 +3860,42 @@
                                             <span class="preview-title">Sample Preview:</span>
                                             <button
                                                 class="preview-refresh-btn"
-                                                on:click={() => dateDistConfig = {...dateDistConfig}}
+                                                on:click={() => dateSampleRefreshKey++}
                                             >
                                                 ↻ Refresh
                                             </button>
                                         </div>
                                         <div class="preview-samples">
-                                            {#each Array.from({length: 10}, (_, i) => {
-                                                const sampleDate = generateConstrainedDate(
-                                                    new Date('2005-12-31'),
-                                                    new Date(),
-                                                    dateDistConfig
-                                                );
-                                                return sampleDate.getFullYear();
-                                            }) as sample}
-                                                <span class="sample-value">{sample}</span>
+                                            {#key dateSampleRefreshKey + JSON.stringify(dateDistConfig)}
+                                            {#each [
+                                                (d) => d.getFullYear().toString(),
+                                                (d) => `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`,
+                                                (d) => d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+                                                (d) => `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`,
+                                                (d) => {
+                                                    const h = d.getHours();
+                                                    const m = String(d.getMinutes()).padStart(2, '0');
+                                                    const s = String(d.getSeconds()).padStart(2, '0');
+                                                    return `${h}:${m}:${s}`;
+                                                },
+                                                (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+                                                (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`
+                                            ] as formatter}
+                                                <span class="sample-value">
+                                                    {(() => {
+                                                        const sampleDate = generateConstrainedDate(
+                                                            new Date('2005-12-31'),
+                                                            new Date(),
+                                                            dateDistConfig
+                                                        );
+                                                        return formatter(sampleDate);
+                                                    })()}
+                                                </span>
                                             {/each}
+                                            {/key}
                                         </div>
                                         <p class="preview-description">
-                                            Sample years your distribution would generate
+                                            Sample date/time specifiers
                                         </p>
                                     </div>
 

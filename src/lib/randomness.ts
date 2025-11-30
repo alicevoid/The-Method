@@ -94,11 +94,21 @@ export function generateConstrainedInteger(
     config: DistributionConfig,
     maxAttempts: number = 100
 ): number {
+    const range = max - min;
+
     if (config.type === 'uniform') {
-        return uniformDistribution(min, max);
+        // UNIFORM: Apply center and spread to create bounded rectangular distribution
+        const halfSpread = config.spread / 2;
+        const lowerBound = Math.max(0, config.center - halfSpread);
+        const upperBound = Math.min(1, config.center + halfSpread);
+
+        // Map bounds to this specific range
+        const actualMin = min + Math.round(lowerBound * range);
+        const actualMax = min + Math.round(upperBound * range);
+
+        return uniformDistribution(actualMin, actualMax);
     }
 
-    const range = max - min;
     const centerValue = min + (range * config.center);
     const stdDev = range * Math.max(config.spread, 0.05);
 
@@ -145,7 +155,17 @@ export function generateConstrainedDate(
     const range = endTime - startTime;
 
     if (config.type === 'uniform') {
-        const randomTime = startTime + Math.random() * range;
+        // UNIFORM: Apply center and spread to create bounded rectangular distribution
+        const halfSpread = config.spread / 2;
+        const lowerBound = Math.max(0, config.center - halfSpread);
+        const upperBound = Math.min(1, config.center + halfSpread);
+
+        // Map bounds to this specific date range
+        const actualStartTime = startTime + (lowerBound * range);
+        const actualEndTime = startTime + (upperBound * range);
+        const actualRange = actualEndTime - actualStartTime;
+
+        const randomTime = actualStartTime + Math.random() * actualRange;
         return new Date(randomTime);
     }
 
@@ -326,7 +346,7 @@ export function debugDistribution(
 
     console.log('\nHistogram (1000 samples):');
     for (let i = 0; i < histogram.buckets.length; i++) {
-        const bar = 'ˆ'.repeat(Math.round(histogram.buckets[i] / 10));
+        const bar = 'ï¿½'.repeat(Math.round(histogram.buckets[i] / 10));
         console.log(`${histogram.labels[i]}: ${bar} (${histogram.buckets[i]})`);
     }
 
