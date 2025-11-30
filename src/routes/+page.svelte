@@ -1388,7 +1388,6 @@
         background-color: #f5f5f5;
         border: 0.5rem solid black;
         flex: 1;
-        overflow-y: auto;
         box-sizing: border-box;
     }
 
@@ -2688,7 +2687,6 @@
     .graph-canvas-wrapper {
         position: relative;
         width: 100%;
-        height: 300px;
         cursor: grab;
         user-select: none;
         background-color: white;
@@ -2697,11 +2695,6 @@
 
     .graph-canvas-wrapper:active {
         cursor: grabbing;
-    }
-
-    .graph-canvas-wrapper canvas {
-        width: 100% !important;
-        height: 100% !important;
     }
 
     .graph-info {
@@ -3616,8 +3609,6 @@
                                         config={integerDistConfig}
                                         label="Integer Distribution"
                                         graphType="integer"
-                                        width={600}
-                                        height={300}
                                     />
                                 </div>
 
@@ -3792,8 +3783,6 @@
                                             config={dateDistConfig}
                                             label="Date Distribution"
                                             graphType="date"
-                                            width={600}
-                                            height={300}
                                             minDate={distributionStartDate}
                                             maxDate={distributionEndDate}
                                         />
@@ -3998,7 +3987,7 @@
                                 id="enable-user-terms"
                                 bind:checked={enableUserTerms}
                             />
-                            <label for="enable-user-terms"><h4>Enable custom terms</h4></label>
+                            <label for="enable-user-terms"><h4>Enable Custom Terms</h4></label>
                         </div>
 
                         {#if enableUserTerms}

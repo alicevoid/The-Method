@@ -23,7 +23,6 @@
 
     :global(html) {
         height: 100%;
-        overflow: hidden;
     }
 
     :global(body) {
@@ -31,8 +30,7 @@
         margin: 0;
         padding: 0;
         font-family: 'Arial', sans-serif;
-        height: 100%;
-        overflow: hidden;
+        min-height: 100%;
     }
 
     /* CSS Variables for repeated values */
@@ -109,7 +107,7 @@
     .page-container {
         display: flex;
         flex-direction: column;
-        height: 100vh;
+        min-height: 100vh;
         box-sizing: border-box;
     }
 
