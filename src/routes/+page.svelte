@@ -23,8 +23,8 @@
     import { base } from '$app/paths';
     import { onMount } from 'svelte';
     import { loadAllSearchTerms, formatSearchTermToURL, fillSpecifierTemplate, type SearchPattern } from '$lib';
-    import { generateConstrainedDate, debugDistribution } from '$lib/randomness';
-    import Chart from 'chart.js/auto';
+    import { generateConstrainedDate, generateConstrainedInteger, debugDistribution } from '$lib/randomness';
+    import DistributionGraph from '$lib/components/DistributionGraph.svelte';
 
     // ============================================================================
     // DATA STRUCTURE: FULL LIST OF SEARCH TERM OBJECTS
@@ -153,10 +153,9 @@
         degreesOfFreedom: 5
     };
 
-    // Chart.js instances
-    let integerChart: Chart | null = null;
-    let dateChart: Chart | null = null;
-    let chartsInitialized = false;
+    // Date range for date distribution graph
+    const distributionStartDate = new Date('2005-12-31');
+    const distributionEndDate = new Date();
 
     // Drag state for graph interaction
     let isDragging = false;
@@ -247,40 +246,7 @@
     // ============================================================================
     // REACTIVE: INITIALIZE CHARTS WHEN RANDOMNESS TAB BECOMES ACTIVE
     // ============================================================================
-    $: if (typeof document !== 'undefined' && activeTab === 'rng') {
-        setTimeout(() => initializeCharts(), 50);
-    }
-
-    // ============================================================================
-    // REACTIVE: UPDATE CHARTS WHEN DISTRIBUTION CONFIGS CHANGE
-    // ============================================================================
-    $: if (integerChart && integerDistConfig) {
-        const data = Array.from({length: 101}, (_, i) => {
-            const x = i / 100;
-            const distance = Math.abs(x - integerDistConfig.center);
-            const spread = Math.max(integerDistConfig.spread, 0.05);
-            return Math.exp(-Math.pow(distance / spread, 2) * 5);
-        });
-
-        integerChart.data.datasets[0].data = data;
-        integerChart.update('none');
-    }
-
-    $: if (dateChart && dateDistConfig) {
-        const startDate = new Date('2005-12-31');
-        const today = new Date();
-        const daysSinceStart = Math.floor((today.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
-
-        const data = Array.from({length: daysSinceStart + 1}, (_, i) => {
-            const x = i / daysSinceStart;
-            const distance = Math.abs(x - dateDistConfig.center);
-            const spread = Math.max(dateDistConfig.spread, 0.05);
-            return Math.exp(-Math.pow(distance / spread, 2) * 5);
-        });
-
-        dateChart.data.datasets[0].data = data;
-        dateChart.update('none');
-    }
+    // Canvas-based graphs will handle their own updates reactively
 
     // ============================================================================
     // REACTIVE: SAVE SEARCH HISTORY TO COOKIES (if enabled)
@@ -886,210 +852,7 @@
     // FUNCTIONS: CHART INITIALIZATION
     // ============================================================================
 
-    function initializeCharts() {
-        if (chartsInitialized) return;
-
-        const integerCanvas = document.getElementById('integerGraph') as HTMLCanvasElement;
-        const dateCanvas = document.getElementById('dateGraph') as HTMLCanvasElement;
-
-        if (!integerCanvas && !dateCanvas) return;
-
-        // Calculate days since 12/31/2005
-        const startDate = new Date('2005-12-31');
-        const today = new Date();
-        const daysSinceStart = Math.floor((today.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
-
-        if (integerCanvas) {
-            const integerData = Array.from({length: 101}, (_, i) => {
-                const x = i / 100;
-                const distance = Math.abs(x - integerDistConfig.center);
-                const spread = Math.max(integerDistConfig.spread, 0.05);
-                return Math.exp(-Math.pow(distance / spread, 2) * 5);
-            });
-
-            integerChart = new Chart(integerCanvas, {
-                type: 'line',
-                data: {
-                    labels: Array.from({length: 101}, (_, i) => i),
-                    datasets: [{
-                        label: 'Probability Density',
-                        data: integerData,
-                        borderColor: '#FF00FF',
-                        backgroundColor: 'rgba(255, 0, 255, 0.4)',
-                        borderWidth: 4,
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 0,
-                        segment: {
-                            borderColor: '#FF00FF',
-                            backgroundColor: 'rgba(255, 0, 255, 0.4)'
-                        }
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: false,
-                    interaction: { mode: 'none' },
-                    plugins: {
-                        legend: { display: false },
-                        title: { display: false },
-                        tooltip: { enabled: false },
-                        filler: { propagate: true }
-                    },
-                    scales: {
-                        x: {
-                            type: 'linear',
-                            display: true,
-                            title: {
-                                display: true,
-                                text: 'Percentage (0% - 100%)',
-                                color: '#000',
-                                font: { size: 14, weight: 'bold' }
-                            },
-                            grid: {
-                                display: true,
-                                drawOnChartArea: true,
-                                color: (ctx) => ctx.tick.value % 5 === 0 ? '#00000066' : '#00000019'
-                            },
-                            ticks: {
-                                color: '#000',
-                                callback: (val) => val + '%',
-                                stepSize: 5
-                            },
-                            min: 0,
-                            max: 100
-                        },
-                        y: {
-                            type: 'linear',
-                            display: true,
-                            title: {
-                                display: true,
-                                text: 'Probability Density',
-                                color: '#000',
-                                font: { size: 14, weight: 'bold' }
-                            },
-                            grid: {
-                                display: true,
-                                color: '#00000019'
-                            },
-                            ticks: {
-                                color: '#000',
-                                callback: (val) => typeof val === 'number' ? val.toFixed(2) : val
-                            },
-                            min: 0,
-                            max: 1.2
-                        }
-                    }
-                }
-            });
-        }
-
-        if (dateCanvas) {
-            // Generate year labels from 2006 to present
-            const years = [];
-            const yearPositions = [];
-            for (let year = 2006; year <= today.getFullYear(); year++) {
-                years.push(year);
-                const yearDate = new Date(year, 0, 1);
-                const daysFromStart = Math.floor((yearDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
-                yearPositions.push(daysFromStart);
-            }
-
-            const dateData = Array.from({length: daysSinceStart + 1}, (_, i) => {
-                const x = i / daysSinceStart;
-                const distance = Math.abs(x - dateDistConfig.center);
-                const spread = Math.max(dateDistConfig.spread, 0.05);
-                return Math.exp(-Math.pow(distance / spread, 2) * 5);
-            });
-
-            dateChart = new Chart(dateCanvas, {
-                type: 'line',
-                data: {
-                    labels: Array.from({length: daysSinceStart + 1}, (_, i) => i),
-                    datasets: [{
-                        label: 'Probability Density',
-                        data: dateData,
-                        borderColor: '#FF00FF',
-                        backgroundColor: 'rgba(255, 0, 255, 0.4)',
-                        borderWidth: 4,
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 0,
-                        segment: {
-                            borderColor: '#FF00FF',
-                            backgroundColor: 'rgba(255, 0, 255, 0.4)'
-                        }
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: false,
-                    interaction: { mode: 'none' },
-                    plugins: {
-                        legend: { display: false },
-                        title: { display: false },
-                        tooltip: { enabled: false },
-                        filler: { propagate: true }
-                    },
-                    scales: {
-                        x: {
-                            type: 'linear',
-                            display: true,
-                            title: {
-                                display: true,
-                                text: '12/31/2005 → Today',
-                                color: '#000',
-                                font: { size: 14, weight: 'bold' }
-                            },
-                            grid: {
-                                display: true,
-                                drawOnChartArea: true,
-                                color: (ctx) => yearPositions.includes(ctx.tick.value) ? '#00000080' : '#00000019'
-                            },
-                            ticks: {
-                                color: '#000',
-                                callback: (val) => {
-                                    const idx = yearPositions.indexOf(val as number);
-                                    return idx >= 0 ? years[idx].toString() : '';
-                                },
-                                autoSkip: false,
-                                maxRotation: 45,
-                                minRotation: 45
-                            },
-                            min: 0,
-                            max: daysSinceStart
-                        },
-                        y: {
-                            type: 'linear',
-                            display: true,
-                            title: {
-                                display: true,
-                                text: 'Probability Density',
-                                color: '#000',
-                                font: { size: 14, weight: 'bold' }
-                            },
-                            grid: {
-                                display: true,
-                                color: '#00000019'
-                            },
-                            ticks: {
-                                color: '#000',
-                                callback: (val) => typeof val === 'number' ? val.toFixed(2) : val
-                            },
-                            min: 0,
-                            max: 1.2
-                        }
-                    }
-                }
-            });
-        }
-
-        if (integerChart || dateChart) {
-            chartsInitialized = true;
-        }
-    }
+    // Charts are now handled by DistributionGraph components
 
     // ============================================================================
     // FUNCTIONS: GRAPH INTERACTION HANDLERS
@@ -1746,10 +1509,31 @@
         font-weight: bold;
         transition: transform var(--transition-std);
         width: 25%;
+        position: relative;
     }
 
     .rand-button:hover {
         transform: scale(1.01);
+    }
+
+    .randomness-badge {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        font-size: 1.5rem;
+        animation: pulse 2s ease-in-out infinite;
+        filter: drop-shadow(0 2px 4px rgba(220, 38, 38, 0.3));
+    }
+
+    @keyframes pulse {
+        0%, 100% {
+            transform: scale(1);
+            opacity: 1;
+        }
+        50% {
+            transform: scale(1.1);
+            opacity: 0.8;
+        }
     }
 
     /* === FILTERS & CHECKBOXES === */
@@ -2783,12 +2567,19 @@
 
     .randomness-controls {
         display: flex;
-        flex-wrap: wrap;
-        gap: 1.5rem;
+        flex-direction: column;
+        gap: 0.75rem;
         padding: 1rem;
         background-color: #f9f9f9;
         border: 2px solid black;
         border-radius: 0.5rem;
+    }
+
+    .randomness-description {
+        margin: 0;
+        font-size: 0.9rem;
+        color: #555;
+        font-style: italic;
     }
 
     .checkbox-label {
@@ -2838,11 +2629,37 @@
         cursor: pointer;
     }
 
+    .distribution-tooltip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        background: rgba(220, 38, 38, 0.1);
+        border: 2px solid rgba(220, 38, 38, 0.3);
+        border-radius: 50%;
+        color: rgba(220, 38, 38, 0.9);
+        font-size: 0.75rem;
+        font-weight: bold;
+        cursor: help;
+        transition: all 0.2s;
+    }
+
+    .distribution-tooltip:hover {
+        background: rgba(220, 38, 38, 0.2);
+        transform: scale(1.1);
+    }
+
     .graph-container {
         padding: 1rem;
         border: 2px solid black;
         border-radius: 0.5rem;
         background-color: white;
+        transition: all 0.3s ease-in-out;
+    }
+
+    .graph-container:hover {
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.15);
     }
 
     .graph-container.disabled {
@@ -2866,10 +2683,12 @@
 
     .graph-canvas-wrapper {
         position: relative;
+        width: 100%;
         height: 300px;
         cursor: grab;
         user-select: none;
         background-color: white;
+        overflow: hidden;
     }
 
     .graph-canvas-wrapper:active {
@@ -2895,6 +2714,224 @@
         font-size: 0.9rem;
         font-weight: bold;
         color: #555;
+    }
+
+    /* Slider Controls */
+    .slider-controls {
+        margin-top: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .slider-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .slider-group label {
+        font-size: 0.85rem;
+        font-weight: bold;
+        color: #333;
+    }
+
+    .distribution-slider {
+        width: 100%;
+        height: 6px;
+        border-radius: 3px;
+        background: linear-gradient(to right, #f5f5f0, rgba(220, 38, 38, 0.3));
+        outline: none;
+        -webkit-appearance: none;
+        appearance: none;
+    }
+
+    .distribution-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: rgba(220, 38, 38, 0.9);
+        cursor: pointer;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        transition: transform 0.1s;
+    }
+
+    .distribution-slider::-webkit-slider-thumb:hover {
+        transform: scale(1.15);
+        background: rgba(220, 38, 38, 1);
+    }
+
+    .distribution-slider::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: rgba(220, 38, 38, 0.9);
+        cursor: pointer;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        transition: transform 0.1s;
+    }
+
+    .distribution-slider::-moz-range-thumb:hover {
+        transform: scale(1.15);
+        background: rgba(220, 38, 38, 1);
+    }
+
+    /* Sample Preview */
+    .sample-preview {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        background: linear-gradient(135deg, #fff9f9 0%, #fff5f5 100%);
+        border: 2px solid rgba(220, 38, 38, 0.2);
+        border-radius: 0.5rem;
+    }
+
+    .preview-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.75rem;
+    }
+
+    .preview-title {
+        font-weight: bold;
+        color: rgba(220, 38, 38, 0.9);
+        font-size: 0.9rem;
+    }
+
+    .preview-refresh-btn {
+        padding: 0.25rem 0.75rem;
+        background: rgba(220, 38, 38, 0.1);
+        border: 1px solid rgba(220, 38, 38, 0.3);
+        border-radius: 0.25rem;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: bold;
+        color: rgba(220, 38, 38, 0.9);
+        transition: all 0.2s;
+    }
+
+    .preview-refresh-btn:hover {
+        background: rgba(220, 38, 38, 0.2);
+        transform: rotate(180deg);
+    }
+
+    .preview-samples {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .sample-value {
+        padding: 0.4rem 0.8rem;
+        background: white;
+        border: 2px solid rgba(220, 38, 38, 0.3);
+        border-radius: 0.25rem;
+        font-weight: bold;
+        font-size: 0.85rem;
+        color: rgba(220, 38, 38, 0.9);
+        font-family: 'Courier New', monospace;
+    }
+
+    .preview-description {
+        margin: 0;
+        font-size: 0.75rem;
+        color: #666;
+        font-style: italic;
+    }
+
+    /* Advanced Settings Accordion */
+    .advanced-settings {
+        margin-top: 1rem;
+        padding: 0.75rem;
+        background: linear-gradient(135deg, #fafafa 0%, #f5f5f0 100%);
+        border: 1px solid rgba(220, 38, 38, 0.2);
+        border-radius: 0.5rem;
+    }
+
+    .advanced-settings summary {
+        cursor: pointer;
+        font-weight: bold;
+        color: rgba(220, 38, 38, 0.9);
+        font-size: 0.9rem;
+        list-style: none;
+        user-select: none;
+        padding: 0.25rem;
+    }
+
+    .advanced-settings summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .advanced-settings summary::before {
+        content: '▶ ';
+        display: inline-block;
+        transition: transform 0.2s;
+    }
+
+    .advanced-settings[open] summary::before {
+        transform: rotate(90deg);
+    }
+
+    .advanced-settings .slider-group {
+        margin-top: 0.75rem;
+    }
+
+    .advanced-settings .help-text {
+        font-size: 0.75rem;
+        color: rgba(0, 0, 0, 0.5);
+        font-weight: normal;
+        font-style: italic;
+    }
+
+    /* Preset Buttons */
+    .preset-buttons {
+        display: flex;
+        gap: 0.5rem;
+        margin: 0.75rem 0;
+        flex-wrap: wrap;
+    }
+
+    .preset-btn {
+        flex: 1;
+        min-width: 100px;
+        padding: 0.5rem 1rem;
+        background: white;
+        border: 2px solid rgba(220, 38, 38, 0.3);
+        border-radius: 0.375rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: rgba(220, 38, 38, 0.9);
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .preset-btn:hover {
+        background: rgba(220, 38, 38, 0.1);
+        border-color: rgba(220, 38, 38, 0.6);
+        transform: translateY(-2px);
+        box-shadow: 0 2px 8px rgba(220, 38, 38, 0.2);
+    }
+
+    .preset-btn:active {
+        transform: translateY(0);
+        box-shadow: 0 1px 4px rgba(220, 38, 38, 0.2);
+    }
+
+    /* Keyboard Shortcuts Hint */
+    .keyboard-hint {
+        font-size: 0.8rem;
+        color: rgba(0, 0, 0, 0.6);
+        font-style: italic;
+        margin: 0 0 0.75rem 0;
+        padding: 0.5rem;
+        background: rgba(220, 38, 38, 0.05);
+        border-left: 3px solid rgba(220, 38, 38, 0.3);
+        border-radius: 0.25rem;
     }
 
     .disabled-notice {
@@ -3184,7 +3221,12 @@
 
             <div class="grid-item">
                 <div class="top-buttons">
-                    <button class="rand-button" on:click={handleFindVideos}><h2>Find Video!</h2></button>
+                    <button class="rand-button" on:click={handleFindVideos}>
+                        <h2>Find Video!</h2>
+                        {#if enableRandomnessMode}
+                            <span class="randomness-badge" title="Randomness Mode Active">🎲</span>
+                        {/if}
+                    </button>
                 </div>
 
             </div>
@@ -3419,23 +3461,16 @@
                                 <input type="checkbox" bind:checked={enableRandomnessMode} />
                                 <span>Enable Randomness Mode</span>
                             </label>
-
-                            <label class="checkbox-label">
-                                <input type="checkbox" bind:checked={enableIntegerGraph} />
-                                <span>Enable Integer Distribution</span>
-                            </label>
-
-                            <label class="checkbox-label">
-                                <input type="checkbox" bind:checked={enableDateGraph} />
-                                <span>Enable Date Distribution</span>
-                            </label>
+                            <p class="randomness-description">
+                                When enabled, distributions control how random values are selected. Graphs appear below.
+                            </p>
                         </div>
 
                         <!-- Graphs Container -->
+                        {#if enableRandomnessMode}
                         <div class="graphs-container">
 
                             <!-- Integer Distribution Graph -->
-                            {#if enableIntegerGraph}
                             <div class="graph-container">
                                 <h3>Integer Specifier Distribution</h3>
                                 <div class="distribution-selector">
@@ -3450,7 +3485,54 @@
                                         <option value="z-curve">Z-Curve (Standard Normal)</option>
                                         <option value="t-curve">T-Curve (Heavy Tails)</option>
                                     </select>
+                                    <span class="distribution-tooltip" title={
+                                        integerDistConfig.type === 'uniform' ? '✨ All values equally likely across the range' :
+                                        integerDistConfig.type === 'bell' ? '📊 Most values near center, fewer at edges (classic bell shape)' :
+                                        integerDistConfig.type === 'z-curve' ? '📊 Same as bell curve (standard normal distribution)' :
+                                        '📈 Like bell curve but with more values at the edges (heavy tails)'
+                                    }>ⓘ</span>
                                 </div>
+
+                                <!-- Preset Buttons -->
+                                <div class="preset-buttons">
+                                    <button
+                                        class="preset-btn"
+                                        on:click={() => {
+                                            integerDistConfig = { ...integerDistConfig, center: 0.5, spread: 0.15 };
+                                        }}
+                                        title="Center-focused with tight spread"
+                                    >
+                                        🎯 Centered
+                                    </button>
+                                    <button
+                                        class="preset-btn"
+                                        on:click={() => {
+                                            integerDistConfig = { ...integerDistConfig, center: 0.25, spread: 0.2 };
+                                        }}
+                                        title="Skewed towards lower values"
+                                    >
+                                        ⬅️ Left
+                                    </button>
+                                    <button
+                                        class="preset-btn"
+                                        on:click={() => {
+                                            integerDistConfig = { ...integerDistConfig, center: 0.75, spread: 0.2 };
+                                        }}
+                                        title="Skewed towards higher values"
+                                    >
+                                        ➡️ Right
+                                    </button>
+                                    <button
+                                        class="preset-btn"
+                                        on:click={() => {
+                                            integerDistConfig = { ...integerDistConfig, center: 0.5, spread: 0.4 };
+                                        }}
+                                        title="Wide spread across all values"
+                                    >
+                                        📊 Wide
+                                    </button>
+                                </div>
+
                                 <p class="graph-description">Drag left/right to move center, up/down to adjust spread</p>
                                 <div
                                     class="graph-canvas-wrapper"
@@ -3458,12 +3540,98 @@
                                     role="button"
                                     tabindex="0"
                                 >
-                                    <canvas id="integerGraph"></canvas>
+                                    <DistributionGraph
+                                        config={integerDistConfig}
+                                        label="Integer Distribution"
+                                        graphType="integer"
+                                        width={600}
+                                        height={300}
+                                    />
                                 </div>
-                                <div class="graph-info">
-                                    <p>Center: {(integerDistConfig.center * 100).toFixed(1)}%</p>
-                                    <p>Spread: {(integerDistConfig.spread * 100).toFixed(1)}%</p>
+
+                                <!-- Slider Controls -->
+                                <div class="slider-controls">
+                                    <p class="keyboard-hint">💡 Tip: Use arrow keys for fine control when slider is focused</p>
+                                    <div class="slider-group">
+                                        <label for="integer-center-slider">
+                                            Center: {(integerDistConfig.center * 100).toFixed(1)}%
+                                        </label>
+                                        <input
+                                            type="range"
+                                            id="integer-center-slider"
+                                            min="0"
+                                            max="1"
+                                            step="0.01"
+                                            bind:value={integerDistConfig.center}
+                                            class="distribution-slider"
+                                        />
+                                    </div>
+                                    <div class="slider-group">
+                                        <label for="integer-spread-slider">
+                                            Spread: {(integerDistConfig.spread * 100).toFixed(1)}%
+                                        </label>
+                                        <input
+                                            type="range"
+                                            id="integer-spread-slider"
+                                            min="0.05"
+                                            max="0.5"
+                                            step="0.01"
+                                            bind:value={integerDistConfig.spread}
+                                            class="distribution-slider"
+                                        />
+                                    </div>
                                 </div>
+
+                                <!-- Advanced Settings (T-Curve only) -->
+                                {#if integerDistConfig.type === 't-curve'}
+                                <details class="advanced-settings">
+                                    <summary>⚙️ Advanced Settings</summary>
+                                    <div class="slider-group">
+                                        <label for="integer-df-slider">
+                                            Degrees of Freedom: {integerDistConfig.degreesOfFreedom || 5}
+                                            <span class="help-text">(lower = heavier tails)</span>
+                                        </label>
+                                        <input
+                                            type="range"
+                                            id="integer-df-slider"
+                                            min="1"
+                                            max="30"
+                                            step="1"
+                                            bind:value={integerDistConfig.degreesOfFreedom}
+                                            class="distribution-slider"
+                                        />
+                                    </div>
+                                </details>
+                                {/if}
+
+                                <!-- Sample Preview -->
+                                <div class="sample-preview">
+                                    <div class="preview-header">
+                                        <span class="preview-title">Sample Preview:</span>
+                                        <button
+                                            class="preview-refresh-btn"
+                                            on:click={() => integerDistConfig = {...integerDistConfig}}
+                                        >
+                                            ↻ Refresh
+                                        </button>
+                                    </div>
+                                    <div class="preview-samples">
+                                        {#each Array.from({length: 10}, (_, i) => {
+                                            // Generate random digit count (2-4 digits) based on distribution
+                                            const digitCount = Math.floor(generateConstrainedInteger(2, 4, integerDistConfig));
+                                            const min = Math.pow(10, digitCount - 1);
+                                            const max = Math.pow(10, digitCount) - 1;
+                                            const val = Math.round(generateConstrainedInteger(min, max, integerDistConfig));
+                                            return val;
+                                        }) as sample}
+                                            <span class="sample-value">{sample}</span>
+                                        {/each}
+                                    </div>
+                                    <p class="preview-description">
+                                        Random numbers your distribution would generate (XX-XXXX range)
+                                    </p>
+                                </div>
+
                                 <button
                                     class="debug-button"
                                     on:click={() => debugDistribution(integerDistConfig, 0, 9999)}
@@ -3471,10 +3639,8 @@
                                     🐛 Debug Integer Distribution
                                 </button>
                             </div>
-                            {/if}
 
                             <!-- Date Distribution Graph -->
-                            {#if enableDateGraph}
                             <div class="graph-container" class:disabled={enableDateOverride}>
                                 <h3>Date Distribution</h3>
                                 {#if enableDateOverride}
@@ -3492,7 +3658,54 @@
                                             <option value="z-curve">Z-Curve (Standard Normal)</option>
                                             <option value="t-curve">T-Curve (Heavy Tails)</option>
                                         </select>
+                                        <span class="distribution-tooltip" title={
+                                            dateDistConfig.type === 'uniform' ? '✨ All years equally likely across the range' :
+                                            dateDistConfig.type === 'bell' ? '📊 Most dates near center, fewer at edges (classic bell shape)' :
+                                            dateDistConfig.type === 'z-curve' ? '📊 Same as bell curve (standard normal distribution)' :
+                                            '📈 Like bell curve but with more dates at the edges (heavy tails)'
+                                        }>ⓘ</span>
                                     </div>
+
+                                    <!-- Preset Buttons -->
+                                    <div class="preset-buttons">
+                                        <button
+                                            class="preset-btn"
+                                            on:click={() => {
+                                                dateDistConfig = { ...dateDistConfig, center: 0.5, spread: 0.15 };
+                                            }}
+                                            title="Center-focused with tight spread"
+                                        >
+                                            🎯 Centered
+                                        </button>
+                                        <button
+                                            class="preset-btn"
+                                            on:click={() => {
+                                                dateDistConfig = { ...dateDistConfig, center: 0.25, spread: 0.2 };
+                                            }}
+                                            title="Skewed towards older videos"
+                                        >
+                                            ⬅️ Older
+                                        </button>
+                                        <button
+                                            class="preset-btn"
+                                            on:click={() => {
+                                                dateDistConfig = { ...dateDistConfig, center: 0.75, spread: 0.2 };
+                                            }}
+                                            title="Skewed towards newer videos"
+                                        >
+                                            ➡️ Newer
+                                        </button>
+                                        <button
+                                            class="preset-btn"
+                                            on:click={() => {
+                                                dateDistConfig = { ...dateDistConfig, center: 0.5, spread: 0.4 };
+                                            }}
+                                            title="Wide spread across all years"
+                                        >
+                                            📊 Wide
+                                        </button>
+                                    </div>
+
                                     <p class="graph-description">Drag left/right to move center, up/down to adjust spread</p>
                                     <div
                                         class="graph-canvas-wrapper"
@@ -3500,12 +3713,100 @@
                                         role="button"
                                         tabindex="0"
                                     >
-                                        <canvas id="dateGraph"></canvas>
+                                        <DistributionGraph
+                                            config={dateDistConfig}
+                                            label="Date Distribution"
+                                            graphType="date"
+                                            width={600}
+                                            height={300}
+                                            minDate={distributionStartDate}
+                                            maxDate={distributionEndDate}
+                                        />
                                     </div>
-                                    <div class="graph-info">
-                                        <p>Center: {(dateDistConfig.center * 100).toFixed(1)}%</p>
-                                        <p>Spread: {(dateDistConfig.spread * 100).toFixed(1)}%</p>
+
+                                    <!-- Slider Controls -->
+                                    <div class="slider-controls">
+                                        <p class="keyboard-hint">💡 Tip: Use arrow keys for fine control when slider is focused</p>
+                                        <div class="slider-group">
+                                            <label for="date-center-slider">
+                                                Center: {(dateDistConfig.center * 100).toFixed(1)}%
+                                            </label>
+                                            <input
+                                                type="range"
+                                                id="date-center-slider"
+                                                min="0"
+                                                max="1"
+                                                step="0.01"
+                                                bind:value={dateDistConfig.center}
+                                                class="distribution-slider"
+                                            />
+                                        </div>
+                                        <div class="slider-group">
+                                            <label for="date-spread-slider">
+                                                Spread: {(dateDistConfig.spread * 100).toFixed(1)}%
+                                            </label>
+                                            <input
+                                                type="range"
+                                                id="date-spread-slider"
+                                                min="0.05"
+                                                max="0.5"
+                                                step="0.01"
+                                                bind:value={dateDistConfig.spread}
+                                                class="distribution-slider"
+                                            />
+                                        </div>
                                     </div>
+
+                                    <!-- Advanced Settings (T-Curve only) -->
+                                    {#if dateDistConfig.type === 't-curve'}
+                                    <details class="advanced-settings">
+                                        <summary>⚙️ Advanced Settings</summary>
+                                        <div class="slider-group">
+                                            <label for="date-df-slider">
+                                                Degrees of Freedom: {dateDistConfig.degreesOfFreedom || 5}
+                                                <span class="help-text">(lower = heavier tails)</span>
+                                            </label>
+                                            <input
+                                                type="range"
+                                                id="date-df-slider"
+                                                min="1"
+                                                max="30"
+                                                step="1"
+                                                bind:value={dateDistConfig.degreesOfFreedom}
+                                                class="distribution-slider"
+                                            />
+                                        </div>
+                                    </details>
+                                    {/if}
+
+                                    <!-- Sample Preview -->
+                                    <div class="sample-preview">
+                                        <div class="preview-header">
+                                            <span class="preview-title">Sample Preview:</span>
+                                            <button
+                                                class="preview-refresh-btn"
+                                                on:click={() => dateDistConfig = {...dateDistConfig}}
+                                            >
+                                                ↻ Refresh
+                                            </button>
+                                        </div>
+                                        <div class="preview-samples">
+                                            {#each Array.from({length: 10}, (_, i) => {
+                                                const sampleDate = generateConstrainedDate(
+                                                    new Date('2005-12-31'),
+                                                    new Date(),
+                                                    dateDistConfig
+                                                );
+                                                return sampleDate.getFullYear();
+                                            }) as sample}
+                                                <span class="sample-value">{sample}</span>
+                                            {/each}
+                                        </div>
+                                        <p class="preview-description">
+                                            Sample years your distribution would generate
+                                        </p>
+                                    </div>
+
                                     <button
                                         class="debug-button"
                                         on:click={() => {
@@ -3519,9 +3820,9 @@
                                     </button>
                                 {/if}
                             </div>
-                            {/if}
 
                         </div>
+                        {/if}
 
                     </div>
                 </div>
